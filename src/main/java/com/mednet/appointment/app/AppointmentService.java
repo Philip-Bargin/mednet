@@ -349,7 +349,19 @@ public class AppointmentService {
                 proposedSlot == null ? null : proposedSlot.getStartsAt(),
                 proposedSlot == null ? null : proposedSlot.getEndsAt(),
                 appointment.getCreatedAt(),
-                appointment.getUpdatedAt());
+                appointment.getUpdatedAt(),
+                provider.getId(),
+                provider.getSpecialty(),
+                rescheduleRequestedBy(appointment, patient));
+    }
+
+    /** Derived from the stored requester email; the email itself is never exposed. */
+    private static String rescheduleRequestedBy(AppointmentEntity appointment, PlatformAccountEntity patient) {
+        String requester = appointment.getRescheduleRequestedByEmail();
+        if (requester == null || !"RESCHEDULE_REQUESTED".equals(appointment.getStatus())) {
+            return null;
+        }
+        return normalizeEmail(requester).equals(normalizeEmail(patient.getEmail())) ? "PATIENT" : "PROVIDER";
     }
 
     private void audit(String actorEmail, String action, String appointmentId) {
@@ -381,7 +393,11 @@ public class AppointmentService {
             Instant proposedStartsAt,
             Instant proposedEndsAt,
             Instant createdAt,
-            Instant updatedAt) {
+            Instant updatedAt,
+            String providerId,
+            String providerSpecialty,
+            /** PATIENT or PROVIDER while a reschedule is pending; otherwise null. */
+            String rescheduleRequestedBy) {
     }
 
     public record AdminAppointmentSummary(

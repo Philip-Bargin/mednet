@@ -3,10 +3,15 @@ package com.mednet.service.app;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,6 +21,7 @@ import com.mednet.admin.data.AdminAuditEventEntity;
 import com.mednet.admin.data.AdminAuditEventRepository;
 import com.mednet.admin.data.PlatformAccountEntity;
 import com.mednet.admin.data.PlatformAccountRepository;
+import com.mednet.laboratory.data.LaboratoryResultRepository;
 import com.mednet.notification.app.NotificationService;
 import com.mednet.patient.app.PatientCareAccess;
 import com.mednet.service.data.PatientServiceRequestEntity;
@@ -32,18 +38,21 @@ public class PatientServiceRequestService {
     private final PatientServiceRequestRepository requests;
     private final AdminAuditEventRepository auditEvents;
     private final NotificationService notifications;
+    private final LaboratoryResultRepository labResults;
 
     public PatientServiceRequestService(
             PatientCareAccess careAccess,
             PlatformAccountRepository accounts,
             PatientServiceRequestRepository requests,
             AdminAuditEventRepository auditEvents,
-            NotificationService notifications) {
+            NotificationService notifications,
+            LaboratoryResultRepository labResults) {
         this.careAccess = careAccess;
         this.accounts = accounts;
         this.requests = requests;
         this.auditEvents = auditEvents;
         this.notifications = notifications;
+        this.labResults = labResults;
     }
 
     @Transactional
@@ -111,10 +120,46 @@ public class PatientServiceRequestService {
     public List<AdminRequestSummary> listForAdministrator(String requestType, String actorEmail) {
         String type = normalizeType(requestType);
         audit(actorEmail, "service_request.queue_accessed", type);
-        return requests.findTop100ByRequestTypeOrderByCreatedAtDesc(type).stream()
-                .map(request -> new AdminRequestSummary(
-                        request.getId(), request.getRequestType(), request.getStatus(), request.getCreatedAt()))
+        List<PatientServiceRequestEntity> rows = requests.findTop100ByRequestTypeOrderByCreatedAtDesc(type);
+        // One lookup for every assigned staff member; only their public IDs leave the service.
+        Map<String, String> publicIds = accounts.findAllById(rows.stream()
+                        .map(PatientServiceRequestEntity::getAssignedStaffAccountId)
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.toSet()))
+                .stream()
+                .collect(Collectors.toMap(PlatformAccountEntity::getId, PlatformAccountEntity::getPublicId));
+        return rows.stream()
+                .map(request -> adminSummary(request, publicIds.get(request.getAssignedStaffAccountId())))
                 .toList();
+    }
+
+    /** Paged version of {@link #listForAdministrator}: newest first, complete (Phase 5D). */
+    @Transactional
+    public Page<AdminRequestSummary> pageForAdministrator(
+            String requestType, List<String> statuses, String actorEmail, int page, int size) {
+        String type = normalizeType(requestType);
+        if (page < 0 || size < 1 || size > 100) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Page must be 0 or more and size 1 to 100");
+        }
+        List<String> statusFilter = statuses == null ? List.of() : statuses.stream()
+                .map(value -> value.trim().toUpperCase(Locale.ROOT))
+                .filter(value -> !value.isEmpty())
+                .distinct()
+                .toList();
+        if (!List.of("OPEN", "IN_PROGRESS", "RESOLVED", "CANCELLED").containsAll(statusFilter)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported service request status");
+        }
+        audit(actorEmail, "service_request.queue_accessed", type);
+        Page<PatientServiceRequestEntity> rows = statusFilter.isEmpty()
+                ? requests.findByRequestTypeOrderByCreatedAtDesc(type, PageRequest.of(page, size))
+                : requests.findByRequestTypeAndStatusInOrderByCreatedAtDesc(type, statusFilter, PageRequest.of(page, size));
+        Map<String, String> publicIds = accounts.findAllById(rows.stream()
+                        .map(PatientServiceRequestEntity::getAssignedStaffAccountId)
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.toSet()))
+                .stream()
+                .collect(Collectors.toMap(PlatformAccountEntity::getId, PlatformAccountEntity::getPublicId));
+        return rows.map(request -> adminSummary(request, publicIds.get(request.getAssignedStaffAccountId())));
     }
 
     @Transactional
@@ -139,8 +184,10 @@ public class PatientServiceRequestService {
                 "Your service request status was updated",
                 "service_request",
                 requestId);
-        return new AdminRequestSummary(
-                request.getId(), request.getRequestType(), request.getStatus(), request.getCreatedAt());
+        String assignedPublicId = request.getAssignedStaffAccountId() == null
+                ? null
+                : accounts.findById(request.getAssignedStaffAccountId()).map(PlatformAccountEntity::getPublicId).orElse(null);
+        return adminSummary(request, assignedPublicId);
     }
 
     @Transactional
@@ -203,8 +250,18 @@ public class PatientServiceRequestService {
         List<PatientServiceRequestEntity> assigned = requests
                 .findByAssignedStaffAccountIdAndRequestTypeOrderByCreatedAtDesc(staff.getId(), type);
         audit(email, "service_request.partner_queue_accessed", staff.getId());
+        // Laboratory orders carry their latest result's review state (one query for the whole list), so the
+        // queue does not depend on a separately loaded, page-limited result list (Phase 5D).
+        Map<String, LatestResult> latest = new java.util.HashMap<>();
+        if ("LABORATORY".equals(type) && !assigned.isEmpty()) {
+            for (var result : labResults.findByRequestIdInOrderByCreatedAtDesc(
+                    assigned.stream().map(PatientServiceRequestEntity::getId).toList())) {
+                latest.putIfAbsent(result.getRequestId(), new LatestResult(
+                        result.getId(), result.getStatus(), result.getCreatedAt(), result.getReviewedAt()));
+            }
+        }
         return assigned.stream()
-                .map(PatientServiceRequestService::partnerDetails)
+                .map(request -> partnerDetails(request, latest.get(request.getId())))
                 .toList();
     }
 
@@ -281,7 +338,17 @@ public class PatientServiceRequestService {
                 request.getUpdatedAt());
     }
 
+    private static AdminRequestSummary adminSummary(PatientServiceRequestEntity request, String assignedStaffPublicId) {
+        return new AdminRequestSummary(
+                request.getId(), request.getRequestType(), request.getStatus(), request.getCreatedAt(),
+                assignedStaffPublicId);
+    }
+
     private static PartnerRequestDetails partnerDetails(PatientServiceRequestEntity request) {
+        return partnerDetails(request, null);
+    }
+
+    private static PartnerRequestDetails partnerDetails(PatientServiceRequestEntity request, LatestResult latestResult) {
         return new PartnerRequestDetails(
                 request.getId(),
                 request.getRequestType(),
@@ -290,7 +357,8 @@ public class PatientServiceRequestService {
                 request.getStatus(),
                 request.getScheduledAt(),
                 request.getCreatedAt(),
-                request.getUpdatedAt());
+                request.getUpdatedAt(),
+                latestResult);
     }
 
     private static ResponseStatusException notFound() {
@@ -308,11 +376,16 @@ public class PatientServiceRequestService {
             java.time.Instant updatedAt) {
     }
 
+    /**
+     * Administrator view of a patient request: no service description, location or result.
+     * {@code assignedStaffPublicId} is the assigned partner's public account ID, or null when unassigned.
+     */
     public record AdminRequestSummary(
             String id,
             String requestType,
             String status,
-            java.time.Instant createdAt) {
+            java.time.Instant createdAt,
+            String assignedStaffPublicId) {
     }
 
     public record PartnerAssignment(
@@ -322,6 +395,10 @@ public class PatientServiceRequestService {
             String status) {
     }
 
+    /**
+     * {@code latestResult}: for laboratory orders in the assigned-queue listing, the newest submitted result's
+     * review state (no result text); null otherwise (Phase 5D, additive).
+     */
     public record PartnerRequestDetails(
             String id,
             String requestType,
@@ -330,6 +407,10 @@ public class PatientServiceRequestService {
             String status,
             Instant scheduledAt,
             java.time.Instant createdAt,
-            java.time.Instant updatedAt) {
+            java.time.Instant updatedAt,
+            LatestResult latestResult) {
+    }
+
+    public record LatestResult(String id, String status, Instant createdAt, Instant reviewedAt) {
     }
 }

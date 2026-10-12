@@ -18,3 +18,4 @@
 /target/
 __pycache__/
 *.pyc
+.gstack/

@@ -100,6 +100,11 @@ public class GoogleOAuth2UserService implements OAuth2UserService<OAuth2UserRequ
             case "ADMIN", "SUPER_ADMIN", "LABORATORY", "HOME_CARE" -> account.getAccountType();
             default -> providerApproved ? "PROVIDER" : "PATIENT";
         };
+        if (!account.isEmailVerified() && account.getPasswordHash() != null) {
+            // Google proves the mailbox owner is signing in, but nobody has confirmed that this
+            // password was set by them (it may come from someone else's sign-up), so drop it.
+            account.setPasswordHash(null);
+        }
         account.linkGoogleSubject(subject);
         account.changeAccountType(role);
         try {

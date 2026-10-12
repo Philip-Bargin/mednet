@@ -1,9 +1,11 @@
 package com.mednet.auth.api;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
@@ -11,6 +13,10 @@ import com.mednet.admin.data.PlatformAccountEntity;
 import com.mednet.admin.data.PlatformAccountRepository;
 import com.mednet.auth.AuthTokenService;
 import com.mednet.auth.email.EkdSendEmailService;
+import com.mednet.auth.security.AccountSessions;
+import com.mednet.auth.security.AuthRateLimitProperties;
+import com.mednet.auth.security.AuthRateLimiter;
+import com.mednet.auth.security.ClientAddressResolver;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -22,6 +28,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AccountAuthControllerTests {
+
+    private final AuthRateLimitProperties limits = new AuthRateLimitProperties();
+    private final AuthRateLimiter limiter = new AuthRateLimiter(limits, Clock.systemUTC());
 
     @Test
     void successfulRegistrationConfirmsVerificationLinkWasQueuedAndDefaultsToPatient() {
@@ -40,10 +49,11 @@ class AccountAuthControllerTests {
                 Instant.now().plusSeconds(3600)));
         when(email.send(anyString(), anyString(), anyString(), anyString())).thenReturn(true);
         AccountAuthController controller =
-                new AccountAuthController(accounts, passwordEncoder, tokens, email, "https://mednet.example.test");
+                new AccountAuthController(accounts, passwordEncoder, tokens, email, "https://mednet.example.test",
+                        limiter, new ClientAddressResolver(limits), mock(AccountSessions.class));
 
         var response = controller.register(new AccountAuthController.CredentialsRequest(
-                address, "Secure-Password-123!", null));
+                address, "Secure-Password-123!", null), new MockHttpServletRequest());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
         assertThat(response.getBody().message())
@@ -76,10 +86,11 @@ class AccountAuthControllerTests {
                 Instant.now().plusSeconds(3600)));
         when(email.send(anyString(), anyString(), anyString(), anyString())).thenReturn(false);
         AccountAuthController controller =
-                new AccountAuthController(accounts, passwordEncoder, tokens, email, "https://mednet.example.test");
+                new AccountAuthController(accounts, passwordEncoder, tokens, email, "https://mednet.example.test",
+                        limiter, new ClientAddressResolver(limits), mock(AccountSessions.class));
 
         var response = controller.register(new AccountAuthController.CredentialsRequest(
-                address, "Secure-Password-123!", null));
+                address, "Secure-Password-123!", null), new MockHttpServletRequest());
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
         assertThat(response.getBody().message()).contains("Verification email could not be sent");

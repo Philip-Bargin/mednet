@@ -1,0 +1,284 @@
+"use client";
+
+import { ArrowRight } from "lucide-react";
+import Link from "next/link";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Alert } from "@/components/ui/alert";
+import { Button, ButtonLink } from "@/components/ui/button";
+import { TextInput } from "@/components/ui/inputs";
+import { PasswordField } from "@/components/ui/password-field";
+import { SegmentedControl } from "@/components/ui/segmented-control";
+import { StateMessage } from "@/components/ui/state-message";
+import { ApiRequestError, getSession } from "@/lib/api";
+import {
+  GOOGLE_AUTHORIZATION_PATH,
+  emailProblem,
+  googleSignInEnabled,
+  passwordProblem,
+  register,
+  requestPasswordReset,
+  resendVerification,
+  signIn,
+} from "./auth-api";
+import { destinationAfterSignIn } from "./destination";
+
+type Mode = "login" | "register" | "forgot" | "resend";
+type FieldErrors = { email?: string; password?: string };
+
+const submitLabels: Record<Mode, string> = {
+  login: "Sign in",
+  register: "Create account",
+  forgot: "Send recovery code",
+  resend: "Resend verification email",
+};
+
+const headings: Record<Mode, string> = {
+  login: "Sign in to MedNet",
+  register: "Create a patient account",
+  forgot: "Recover your password",
+  resend: "Resend verification email",
+};
+
+function goTo(destination: string) {
+  window.location.replace(destination);
+}
+
+/**
+ * Sign-in, registration, verification resend and password-recovery request.
+ * Contracts and messages are unchanged from the original page; only presentation and the
+ * shared API client are new. New accounts start as patients; provider access needs approval.
+ */
+export function SignInPanel({ googleError }: { googleError: boolean }) {
+  const [sessionChecked, setSessionChecked] = useState(false);
+  const [googleEnabled, setGoogleEnabled] = useState<boolean | null>(null);
+  const [mode, setMode] = useState<Mode>("login");
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [offerResend, setOfferResend] = useState(false);
+  const [recoverySent, setRecoverySent] = useState(false);
+  const emailRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    getSession()
+      .then((session) => {
+        if (!active) return;
+        if (session) goTo(destinationAfterSignIn(session.role, window.location.search, window.location.origin));
+        else setSessionChecked(true);
+      })
+      .catch(() => active && setSessionChecked(true));
+    googleSignInEnabled().then((enabled) => active && setGoogleEnabled(enabled));
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  function switchMode(next: Mode) {
+    setMode(next);
+    setError("");
+    setMessage("");
+    setFieldErrors({});
+    setOfferResend(false);
+    setRecoverySent(false);
+  }
+
+  const needsPassword = mode === "login" || mode === "register";
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const password = String(new FormData(event.currentTarget).get("password") ?? "");
+    const trimmed = email.trim();
+    const errors: FieldErrors = { email: emailProblem(trimmed) ?? undefined };
+    if (mode === "login" && !password) errors.password = "Enter your password.";
+    if (mode === "register") errors.password = passwordProblem(password) ?? undefined;
+    setFieldErrors(errors);
+    if (errors.email) return emailRef.current?.focus();
+    if (needsPassword && errors.password) return passwordRef.current?.focus();
+
+    setBusy(true);
+    setError("");
+    setMessage("");
+    setOfferResend(false);
+    setRecoverySent(false);
+    try {
+      if (mode === "login") {
+        const session = await signIn(trimmed, password);
+        if (!session) throw new Error("Sign-in succeeded, but your account could not be loaded. Refresh to continue.");
+        goTo(destinationAfterSignIn(session.role, window.location.search, window.location.origin));
+        return;
+      }
+      if (mode === "register") {
+        const result = await register(trimmed, password);
+        switchMode("login");
+        setMessage(
+          result.message ??
+            "We’ve received your request. If a new account can be created for this email, we’ll send a verification link.",
+        );
+        setOfferResend(true);
+      } else if (mode === "resend") {
+        const result = await resendVerification(trimmed);
+        switchMode("login");
+        setMessage(result.message ?? "If an account with this email needs verification, we will send a new verification link shortly.");
+      } else {
+        const result = await requestPasswordReset(trimmed);
+        setMessage(result.message ?? "If the account exists, password recovery instructions have been sent.");
+        setRecoverySent(true);
+      }
+    } catch (cause) {
+      if (mode === "login" && cause instanceof ApiRequestError) {
+        if (cause.status === 503) setError("Sign-in is temporarily unavailable. Please try again shortly.");
+        else {
+          if (cause.status === 401) setOfferResend(true);
+          setError("Sign-in failed. Verify your email and password.");
+        }
+      } else {
+        setError(cause instanceof Error ? cause.message : "Request failed. Try again.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!sessionChecked) {
+    return <StateMessage kind="loading" layout="inline" title="Checking your session…" />;
+  }
+
+  const resendOffer =
+    mode === "login" && offerResend ? (
+      <button
+        type="button"
+        onClick={() => switchMode("resend")}
+        className="inline-flex min-h-10 items-center gap-1.5 rounded-sm text-data font-bold text-green-800 hover:underline"
+      >
+        Resend verification email
+        <ArrowRight aria-hidden size={16} strokeWidth={1.8} />
+      </button>
+    ) : null;
+
+  return (
+    <div className="flex flex-col gap-6">
+      {mode === "login" || mode === "register" ? (
+        <SegmentedControl
+          legend="Account access"
+          value={mode}
+          onChange={(value) => switchMode(value as Mode)}
+          options={[
+            { value: "login", label: "Sign in" },
+            { value: "register", label: "Create account" },
+          ]}
+        />
+      ) : null}
+
+      <div>
+        <h2 className="text-title text-ink">{headings[mode]}</h2>
+        {mode === "register" ? (
+          <p className="mt-1 text-data text-text-secondary">
+            New accounts start with patient access. Provider access requires approval.
+          </p>
+        ) : null}
+        {mode === "resend" ? (
+          <p className="mt-1 text-data text-text-secondary">
+            Verification uses an emailed link, not a code. If this address has an account awaiting verification, we’ll
+            send a fresh link.
+          </p>
+        ) : null}
+        {mode === "forgot" ? (
+          <p className="mt-1 text-data text-text-secondary">We’ll email a six-digit recovery code to this address.</p>
+        ) : null}
+      </div>
+
+      {googleError ? (
+        <Alert tone="critical" live="assertive" title="Google sign-in could not be completed">
+          Try again or use your email and password.
+        </Alert>
+      ) : null}
+
+      <form noValidate onSubmit={submit} className="flex flex-col gap-5" aria-label={headings[mode]}>
+        <TextInput
+          ref={emailRef}
+          name="email"
+          type="email"
+          label="Email address"
+          autoComplete="email"
+          required
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+          error={fieldErrors.email}
+        />
+        {needsPassword ? (
+          <PasswordField
+            key={mode}
+            ref={passwordRef}
+            name="password"
+            label="Password"
+            required
+            autoComplete={mode === "login" ? "current-password" : "new-password"}
+            description={mode === "register" ? "At least 12 characters." : undefined}
+            error={fieldErrors.password}
+          />
+        ) : null}
+
+        {error ? (
+          <Alert tone="critical" live="assertive" title={error} action={resendOffer} />
+        ) : null}
+        {message ? (
+          <Alert tone="success" live="polite" title={message} action={resendOffer} />
+        ) : null}
+        {recoverySent ? (
+          <ButtonLink href={`/reset?email=${encodeURIComponent(email.trim())}`} variant="secondary" fullWidth>
+            Enter your recovery code
+          </ButtonLink>
+        ) : null}
+
+        <Button type="submit" fullWidth loading={busy}>
+          {submitLabels[mode]}
+        </Button>
+      </form>
+
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {mode === "login" ? (
+          <button
+            type="button"
+            onClick={() => switchMode("forgot")}
+            className="min-h-10 rounded-sm text-data font-semibold text-green-800 hover:underline"
+          >
+            Forgot password?
+          </button>
+        ) : mode !== "register" ? (
+          <button
+            type="button"
+            onClick={() => switchMode("login")}
+            className="min-h-10 rounded-sm text-data font-semibold text-green-800 hover:underline"
+          >
+            Back to sign in
+          </button>
+        ) : null}
+        {mode === "login" ? (
+          <Link href="/reset" className="min-h-10 content-center rounded-sm text-data text-text-secondary hover:text-action">
+            Have a recovery code?
+          </Link>
+        ) : null}
+      </div>
+
+      <div className="border-t border-border pt-5">
+        <p className="mb-3 text-caption font-semibold text-text-secondary">Other sign-in options</p>
+        {googleEnabled === null ? (
+          <StateMessage kind="loading" layout="inline" title="Checking sign-in availability…" live={false} />
+        ) : googleEnabled ? (
+          <ButtonLink href={GOOGLE_AUTHORIZATION_PATH} prefetch={false} variant="secondary" fullWidth>
+            Continue with Google
+          </ButtonLink>
+        ) : (
+          <p className="text-data text-text-secondary">Google sign-in is not configured for this deployment yet.</p>
+        )}
+        <p className="mt-3 text-caption text-text-muted">
+          Google verifies your email. MedNet keeps access roles and protected data on its backend.
+        </p>
+      </div>
+    </div>
+  );
+}

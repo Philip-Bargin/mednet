@@ -1,9 +1,12 @@
 package com.mednet.provider.app;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Page;
@@ -19,6 +22,7 @@ import com.mednet.admin.data.AdminAuditEventRepository;
 import com.mednet.notification.app.NotificationService;
 import com.mednet.provider.data.ProviderApplicationEntity;
 import com.mednet.provider.data.ProviderApplicationRepository;
+import com.mednet.provider.data.ProviderAvailabilitySlotRepository;
 
 @Service
 @ConditionalOnProperty(prefix = "spring.datasource", name = "url")
@@ -27,14 +31,17 @@ public class ProviderService {
     private static final Set<String> ACTIVE_APPLICATION_STATUSES = Set.of("PENDING", "APPROVED", "SUSPENDED");
 
     private final ProviderApplicationRepository applications;
+    private final ProviderAvailabilitySlotRepository slots;
     private final AdminAuditEventRepository auditEvents;
     private final NotificationService notifications;
 
     public ProviderService(
             ProviderApplicationRepository applications,
+            ProviderAvailabilitySlotRepository slots,
             AdminAuditEventRepository auditEvents,
             NotificationService notifications) {
         this.applications = applications;
+        this.slots = slots;
         this.auditEvents = auditEvents;
         this.notifications = notifications;
     }
@@ -43,11 +50,39 @@ public class ProviderService {
     public Page<ProviderDirectoryEntry> directory(int page, int size, String specialty, String search) {
         int safePage = Math.max(0, page);
         int safeSize = Math.min(Math.max(1, size), 100);
-        return applications.findApprovedDirectory(
-                        normalizeFilter(specialty),
-                        normalizeFilter(search),
-                        PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.ASC, "displayName")))
-                .map(ProviderService::toDirectoryEntry);
+        Page<ProviderApplicationEntity> providers = applications.findApprovedDirectory(
+                normalizeFilter(specialty),
+                normalizeFilter(search),
+                PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.ASC, "displayName")));
+        // One grouped query for the page's next open times, instead of one availability call per provider.
+        Map<String, Instant> nextOpen = providers.isEmpty()
+                ? Map.of()
+                : slots.findNextOpenSlots(providers.map(ProviderApplicationEntity::getId).toList(), Instant.now())
+                        .stream()
+                        .collect(Collectors.toMap(
+                                ProviderAvailabilitySlotRepository.NextOpenSlot::getProviderId,
+                                ProviderAvailabilitySlotRepository.NextOpenSlot::getStartsAt));
+        return providers.map(provider -> toDirectoryEntry(provider, nextOpen.get(provider.getId())));
+    }
+
+    /** One approved provider as the directory shows it; 404 for anyone else. */
+    @Transactional(readOnly = true)
+    public ProviderDirectoryEntry directoryEntry(String providerId) {
+        ProviderApplicationEntity provider = applications.findByIdAndStatus(providerId, "APPROVED")
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Provider not found"));
+        Instant next = slots.findNextOpenSlots(List.of(provider.getId()), Instant.now()).stream()
+                .findFirst()
+                .map(ProviderAvailabilitySlotRepository.NextOpenSlot::getStartsAt)
+                .orElse(null);
+        return toDirectoryEntry(provider, next);
+    }
+
+    /** Approved providers per specialty across the whole directory. */
+    @Transactional(readOnly = true)
+    public List<SpecialtyCount> specialties() {
+        return applications.countApprovedBySpecialty().stream()
+                .map(row -> new SpecialtyCount(row.getSpecialty(), row.getProviders()))
+                .toList();
     }
 
     @Transactional
@@ -119,12 +154,13 @@ public class ProviderService {
                 application.getReviewedAt());
     }
 
-    private static ProviderDirectoryEntry toDirectoryEntry(ProviderApplicationEntity provider) {
+    private static ProviderDirectoryEntry toDirectoryEntry(ProviderApplicationEntity provider, Instant nextAvailableAt) {
         return new ProviderDirectoryEntry(
                 provider.getId(),
                 provider.getDisplayName(),
                 provider.getSpecialty(),
-                provider.getCredentialReference());
+                provider.getCredentialReference(),
+                nextAvailableAt);
     }
 
     public record ProviderApplication(
@@ -137,10 +173,15 @@ public class ProviderService {
             java.time.Instant reviewedAt) {
     }
 
+    /** {@code nextAvailableAt}: the earliest open future slot, or null when none (Phase 5D, additive). */
     public record ProviderDirectoryEntry(
             String id,
             String displayName,
             String specialty,
-            String credentialReference) {
+            String credentialReference,
+            Instant nextAvailableAt) {
+    }
+
+    public record SpecialtyCount(String specialty, long providers) {
     }
 }

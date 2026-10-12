@@ -18,7 +18,8 @@ import com.mednet.record.data.PatientProviderRecordConsentRepository;
 @ConditionalOnProperty(prefix = "spring.datasource", name = "url")
 public class PatientCareAccess {
 
-    private static final List<String> CARE_STATUSES = List.of("CONFIRMED", "COMPLETED", "RESCHEDULE_REQUESTED");
+    /** Appointment statuses that make a care relationship between a patient and a provider. */
+    public static final List<String> CARE_STATUSES = List.of("CONFIRMED", "COMPLETED", "RESCHEDULE_REQUESTED");
 
     private final PlatformAccountRepository accounts;
     private final ProviderApplicationRepository providers;

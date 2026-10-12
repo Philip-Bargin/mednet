@@ -19,6 +19,13 @@ mednet:
     password: ${MEDNET_ADMIN_PASSWORD:}
   google:
     enabled: ${GOOGLE_OAUTH_ENABLED:false}
+  session:
+    # Signed-in sessions end this long after sign-in even when active (0 disables).
+    absolute-timeout: ${SESSION_ABSOLUTE_TIMEOUT:12h}
+  rate-limit:
+    enabled: ${MEDNET_RATE_LIMIT_ENABLED:true}
+    # Reverse proxies (addresses or CIDR ranges) whose X-Forwarded-For identifies the client.
+    trusted-proxies: ${MEDNET_TRUSTED_PROXIES:}
 
 springdoc:
   api-docs:
@@ -35,6 +42,8 @@ server:
   forward-headers-strategy: framework
   servlet:
     session:
+      # Idle timeout: a session unused for this long ends.
+      timeout: ${SESSION_IDLE_TIMEOUT:30m}
       cookie:
         http-only: true
         secure: ${SESSION_COOKIE_SECURE:true}

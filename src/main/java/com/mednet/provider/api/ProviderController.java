@@ -1,10 +1,13 @@
 package com.mednet.provider.api;
 
+import java.util.List;
+
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Page;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -14,6 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.mednet.provider.app.ProviderService;
 import com.mednet.provider.app.ProviderService.ProviderApplication;
 import com.mednet.provider.app.ProviderService.ProviderDirectoryEntry;
+import com.mednet.provider.app.ProviderService.SpecialtyCount;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -37,6 +41,18 @@ public class ProviderController {
             @RequestParam(required = false) String specialty,
             @RequestParam(required = false) String search) {
         return service.directory(page, size, specialty, search);
+    }
+
+    /** Approved providers per specialty across the whole directory (public). */
+    @GetMapping("/specialties")
+    public List<SpecialtyCount> specialties() {
+        return service.specialties();
+    }
+
+    /** One approved provider's directory entry (public); 404 for anyone else. */
+    @GetMapping("/{providerId}")
+    public ProviderDirectoryEntry directoryEntry(@PathVariable @Size(max = 36) String providerId) {
+        return service.directoryEntry(providerId);
     }
 
     @PostMapping("/applications")
