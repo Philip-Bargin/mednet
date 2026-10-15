@@ -163,7 +163,8 @@ The current API preserves its established success response bodies for frontend c
 Availability is represented by explicit future instants (ISO-8601 timestamps), not recurring schedules. Providers may
 mark a slot `IN_PERSON` or `TEXT`; omitted modes default to `TEXT` for compatibility with existing clients. A pending
 or confirmed appointment reserves its slot. Rescheduling requires the other participant's acceptance; cancellation is
-allowed before the slot starts. Payment is out of scope; cancellation fees and no-show behavior remain undefined.
+allowed before the slot starts. Appointment responses expose `providerId`, `providerSpecialty` and
+`rescheduleRequestedBy` (`PATIENT`/`PROVIDER`, derived from the stored requester; the email is not exposed). Payment is out of scope; cancellation fees and no-show behavior remain undefined.
 
 ### Medical records (current implementation)
 

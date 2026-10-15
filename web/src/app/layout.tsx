@@ -1,17 +1,10 @@
 import type { Metadata } from "next";
-import { DM_Sans, DM_Serif_Display } from "next/font/google";
+import { Source_Sans_3 } from "next/font/google";
 import "./globals.css";
 
-const dmSans = DM_Sans({
+const sourceSans = Source_Sans_3({
   subsets: ["latin"],
-  variable: "--font-sans",
-  display: "swap",
-});
-
-const dmSerifDisplay = DM_Serif_Display({
-  subsets: ["latin"],
-  weight: "400",
-  variable: "--font-display",
+  variable: "--font-source-sans",
   display: "swap",
 });
 
@@ -26,10 +19,12 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" data-scroll-behavior="smooth">
-      <body className={`${dmSans.variable} ${dmSerifDisplay.variable}`}>
-        {children}
-      </body>
+    <html
+      lang="en"
+      data-scroll-behavior="smooth"
+      className={sourceSans.variable}
+    >
+      <body>{children}</body>
     </html>
   );
 }

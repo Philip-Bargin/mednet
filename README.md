@@ -52,17 +52,17 @@ Run the backend integration tests from the repository root. They use an in-memor
 mvn test
 ```
 
-To verify the Flyway migrations and persistence mappings against real PostgreSQL, configure
-environment variables for a dedicated, empty test database and run:
+To verify the migrations and the full workflow suite against real PostgreSQL, provision the dedicated
+test role and database described in [PostgreSQL setup](docs/POSTGRESQL_SETUP.md), keep their settings in
+the git-ignored `.env.test.local`, and run:
 
 ```sh
-export MEDNET_TEST_DATABASE_URL=jdbc:postgresql://localhost:5432/mednet_test
-export MEDNET_TEST_DATABASE_USERNAME=mednet_test
-export MEDNET_TEST_DATABASE_PASSWORD=replace-with-a-local-test-password
+set -a; . ./.env.test.local; set +a
 mvn -Ppostgres-it verify
 ```
 
-The PostgreSQL profile applies migrations to the configured database. Never point it at production
+Each run empties the test database before migrating it. The run is refused unless the database name
+ends in `_test`, the test role is not a superuser and it owns the database. Never point it at production
 or a database containing data you need to preserve.
 
 Run the web checks from `web/`:

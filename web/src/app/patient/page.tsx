@@ -1,13 +1,8 @@
 import type { Metadata } from "next";
-import { PatientDashboard } from "@/components/patient-dashboard";
+import { PatientOverview } from "@/features/patient/overview";
 
-export const metadata: Metadata = {
-  title: "Patient dashboard",
-  robots: { index: false, follow: false },
-};
-
-export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Overview" };
 
 export default function PatientPage() {
-  return <PatientDashboard />;
+  return <PatientOverview />;
 }

@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
@@ -29,6 +30,10 @@ import com.mednet.admin.data.PlatformAccountRepository;
 import com.mednet.auth.AuthTokenService;
 import com.mednet.auth.AuthTokenService.IssuedToken;
 import com.mednet.auth.email.EkdSendEmailService;
+import com.mednet.auth.security.AccountSessions;
+import com.mednet.auth.security.AuthRateLimitProperties;
+import com.mednet.auth.security.AuthRateLimiter;
+import com.mednet.auth.security.ClientAddressResolver;
 
 @RestController
 @RequestMapping("/api/v1/auth")
@@ -44,32 +49,45 @@ public class AccountAuthController {
     private final AuthTokenService tokens;
     private final EkdSendEmailService email;
     private final String publicUrl;
+    private final AuthRateLimiter limiter;
+    private final ClientAddressResolver clients;
+    private final AccountSessions sessions;
 
     public AccountAuthController(
             PlatformAccountRepository accounts,
             PasswordEncoder passwordEncoder,
             AuthTokenService tokens,
             EkdSendEmailService email,
-            @org.springframework.beans.factory.annotation.Value("${NEXTAUTH_URL:http://localhost:3000}") String publicUrl) {
+            @org.springframework.beans.factory.annotation.Value("${NEXTAUTH_URL:http://localhost:3000}") String publicUrl,
+            AuthRateLimiter limiter,
+            ClientAddressResolver clients,
+            AccountSessions sessions) {
         this.accounts = accounts;
         this.passwordEncoder = passwordEncoder;
         this.tokens = tokens;
         this.email = email;
         this.publicUrl = publicUrl.replaceAll("/$", "");
+        this.limiter = limiter;
+        this.clients = clients;
+        this.sessions = sessions;
     }
 
     @PostMapping("/register")
-    public ResponseEntity<MessageResponse> register(@Valid @RequestBody CredentialsRequest request) {
+    public ResponseEntity<MessageResponse> register(
+            @Valid @RequestBody CredentialsRequest request, HttpServletRequest httpRequest) {
         String normalizedEmail = normalize(request.email());
         validatePassword(request.password());
+        limitEmailDelivery(httpRequest, normalizedEmail);
         PlatformAccountEntity account = accounts.findFirstByEmailIgnoreCase(normalizedEmail).orElse(null);
         if (account == null) {
             account = new PlatformAccountEntity(UUID.randomUUID().toString(), normalizedEmail,
                     requestedAccountType(request.accountType()));
+            account.setPasswordHash(passwordEncoder.encode(request.password()));
         } else if (account.isEmailVerified()) {
             return ResponseEntity.status(HttpStatus.ACCEPTED).body(registrationResponse());
         }
-        account.setPasswordHash(passwordEncoder.encode(request.password()));
+        // An existing unverified account keeps its password (for example one an administrator set
+        // for new staff); signing up again only resends the verification link to the owner.
         if (!sendVerification(account)) {
             return verificationDeliveryFailure();
         }
@@ -77,8 +95,11 @@ public class AccountAuthController {
     }
 
     @PostMapping("/resend-verification")
-    public ResponseEntity<MessageResponse> resendVerification(@Valid @RequestBody EmailRequest request) {
-        PlatformAccountEntity account = accounts.findFirstByEmailIgnoreCase(normalize(request.email())).orElse(null);
+    public ResponseEntity<MessageResponse> resendVerification(
+            @Valid @RequestBody EmailRequest request, HttpServletRequest httpRequest) {
+        String normalizedEmail = normalize(request.email());
+        limitEmailDelivery(httpRequest, normalizedEmail);
+        PlatformAccountEntity account = accounts.findFirstByEmailIgnoreCase(normalizedEmail).orElse(null);
         if (account != null && !account.isEmailVerified()) {
             if (!sendVerification(account)) {
                 return verificationDeliveryFailure();
@@ -91,7 +112,10 @@ public class AccountAuthController {
     @Transactional
     public MessageResponse verify(
             @RequestParam @NotBlank @Email @Size(max = 254) String email,
-            @RequestParam @NotBlank @Size(min = 43, max = 43) @Pattern(regexp = "[A-Za-z0-9_-]{43}") String token) {
+            @RequestParam @NotBlank @Size(min = 43, max = 43) @Pattern(regexp = "[A-Za-z0-9_-]{43}") String token,
+            HttpServletRequest httpRequest) {
+        AuthRateLimitProperties limits = limiter.properties();
+        limiter.consume("verification-link", "client", clients.resolve(httpRequest), limits.getLinkChecksPerClient());
         PlatformAccountEntity account = accounts.findFirstByEmailIgnoreCase(normalize(email)).orElseThrow(
                 () -> new AuthRequestException("Verification link is invalid or expired"));
         if (account.getVerificationTokenHash() == null
@@ -107,8 +131,11 @@ public class AccountAuthController {
 
     @PostMapping("/forgot-password")
     @Transactional
-    public ResponseEntity<MessageResponse> forgotPassword(@Valid @RequestBody EmailRequest request) {
-        PlatformAccountEntity account = accounts.findFirstByEmailIgnoreCase(normalize(request.email())).orElse(null);
+    public ResponseEntity<MessageResponse> forgotPassword(
+            @Valid @RequestBody EmailRequest request, HttpServletRequest httpRequest) {
+        String normalizedEmail = normalize(request.email());
+        limitEmailDelivery(httpRequest, normalizedEmail);
+        PlatformAccountEntity account = accounts.findFirstByEmailIgnoreCase(normalizedEmail).orElse(null);
         if (account != null && account.isEmailVerified()) {
             IssuedToken code = tokens.issueNumericCode(RESET_CODE_LIFETIME);
             account.setPasswordResetCode(
@@ -132,8 +159,10 @@ public class AccountAuthController {
     @PostMapping("/reset-password/verify")
     @Transactional
     public ResponseEntity<ResetVerificationResponse> verifyPasswordResetCode(
-            @Valid @RequestBody ResetCodeRequest request) {
-        PlatformAccountEntity account = accounts.findFirstByEmailIgnoreCase(normalize(request.email())).orElse(null);
+            @Valid @RequestBody ResetCodeRequest request, HttpServletRequest httpRequest) {
+        String normalizedEmail = normalize(request.email());
+        limitCodeChecks(httpRequest, normalizedEmail);
+        PlatformAccountEntity account = accounts.findFirstByEmailIgnoreCase(normalizedEmail).orElse(null);
         if (account == null || account.isPasswordResetVerified()) {
             return invalidResetCode();
         }
@@ -164,9 +193,12 @@ public class AccountAuthController {
 
     @PostMapping("/reset-password")
     @Transactional
-    public MessageResponse resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+    public MessageResponse resetPassword(
+            @Valid @RequestBody ResetPasswordRequest request, HttpServletRequest httpRequest) {
         validatePassword(request.password());
-        PlatformAccountEntity account = accounts.findFirstByEmailIgnoreCase(normalize(request.email())).orElseThrow(
+        String normalizedEmail = normalize(request.email());
+        limitCodeChecks(httpRequest, normalizedEmail);
+        PlatformAccountEntity account = accounts.findFirstByEmailIgnoreCase(normalizedEmail).orElseThrow(
                 () -> new AuthRequestException("Reset link is invalid or expired"));
         String ticket = request.token() == null ? "" : request.token();
         if (!account.isPasswordResetVerified()
@@ -180,10 +212,31 @@ public class AccountAuthController {
         account.setPasswordHash(passwordEncoder.encode(request.password()));
         account.clearPasswordResetToken();
         accounts.save(account);
+        // Anyone still signed in with the old password is signed out.
+        sessions.endAll(account.getEmail());
         email.send(account.getEmail(), "Your MedNet password was changed",
                 "<p>Your MedNet password was changed successfully.</p>",
                 "Your MedNet password was changed successfully.");
         return new MessageResponse("Password updated. You can now sign in.");
+    }
+
+    /** Sign-up, resend and forgot-password all send email: one allowance per address and per client. */
+    private void limitEmailDelivery(HttpServletRequest httpRequest, String normalizedEmail) {
+        AuthRateLimitProperties limits = limiter.properties();
+        limiter.consume("email-delivery", "client", clients.resolve(httpRequest), limits.getEmailDeliveryPerClient());
+        limiter.consume("email-delivery", "account", AuthRateLimiter.accountKey(normalizedEmail),
+                limits.getEmailDeliveryPerAccount());
+    }
+
+    /**
+     * Reset-code and reset-ticket checks. The per-address allowance holds however many client addresses
+     * are used, so distributed guessing of the 6-digit code gets the same few attempts per hour.
+     */
+    private void limitCodeChecks(HttpServletRequest httpRequest, String normalizedEmail) {
+        AuthRateLimitProperties limits = limiter.properties();
+        limiter.consume("reset-code", "client", clients.resolve(httpRequest), limits.getCodeChecksPerClient());
+        limiter.consume("reset-code", "account", AuthRateLimiter.accountKey(normalizedEmail),
+                limits.getCodeChecksPerAccount());
     }
 
     private boolean sendVerification(PlatformAccountEntity account) {

@@ -1,13 +1,8 @@
 import type { Metadata } from "next";
-import { PatientProfile } from "@/components/patient-profile";
+import { PatientProfileForm } from "@/features/patient/profile-form";
 
-export const metadata: Metadata = {
-  title: "Patient profile",
-  robots: { index: false, follow: false },
-};
-
-export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Your profile" };
 
 export default function PatientProfilePage() {
-  return <PatientProfile />;
+  return <PatientProfileForm />;
 }

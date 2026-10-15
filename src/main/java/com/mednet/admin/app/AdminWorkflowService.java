@@ -30,6 +30,7 @@ import com.mednet.admin.data.PlatformAccountRepository;
 import com.mednet.admin.data.ServiceRequestEntity;
 import com.mednet.admin.data.ServiceRequestRepository;
 import com.mednet.appointment.data.AppointmentRepository;
+import com.mednet.auth.security.AccountSessions;
 import com.mednet.message.data.ConversationRepository;
 import com.mednet.medication.data.MedicationScheduleRepository;
 import com.mednet.patient.data.PatientProfileRepository;
@@ -51,6 +52,7 @@ public class AdminWorkflowService {
     private static final Set<String> CREATABLE_ACCOUNT_TYPES =
             Set.of("PATIENT", "PROVIDER", "LABORATORY", "HOME_CARE");
     private static final Set<String> ACCOUNT_STATUSES = Set.of("ACTIVE", "SUSPENDED");
+    private static final Set<String> PRIVILEGED_ACCOUNT_TYPES = Set.of("ADMIN", "SUPER_ADMIN");
     private static final Set<String> REQUEST_TYPES = Set.of("APPOINTMENT", "HOME_CARE", "LABORATORY");
     private static final Set<String> REQUEST_STATUSES = Set.of("OPEN", "IN_PROGRESS", "RESOLVED", "CANCELLED");
 
@@ -68,6 +70,7 @@ public class AdminWorkflowService {
     private final PatientServiceRequestRepository patientServiceRequests;
     private final NotificationService notifications;
     private final PasswordEncoder passwordEncoder;
+    private final AccountSessions sessions;
     private final String configuredAdminEmail;
 
     public AdminWorkflowService(
@@ -85,6 +88,7 @@ public class AdminWorkflowService {
             PatientServiceRequestRepository patientServiceRequests,
             NotificationService notifications,
             PasswordEncoder passwordEncoder,
+            AccountSessions sessions,
             @Value("${mednet.admin.email:}") String configuredAdminEmail) {
         this.providers = providers;
         this.accounts = accounts;
@@ -100,6 +104,7 @@ public class AdminWorkflowService {
         this.patientServiceRequests = patientServiceRequests;
         this.notifications = notifications;
         this.passwordEncoder = passwordEncoder;
+        this.sessions = sessions;
         this.configuredAdminEmail = normalizeEmail(configuredAdminEmail);
     }
 
@@ -110,6 +115,18 @@ public class AdminWorkflowService {
                 ? providers.findTop100ByOrderByCreatedAtDesc()
                 : providers.findTop100ByStatusOrderByCreatedAtDesc(filter);
         return rows.stream().map(AdminWorkflowService::toModel).toList();
+    }
+
+    /** Paged version of {@link #providers}: newest first, complete (Phase 5D). */
+    @Transactional(readOnly = true)
+    public Page<ProviderApplication> providersPage(String status, String search, int page, int size) {
+        String filter = optionalStatus(status, PROVIDER_STATUSES);
+        String term = search == null ? "" : search.trim().toLowerCase(Locale.ROOT);
+        if (term.length() > 120) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Search may not exceed 120 characters");
+        }
+        return providers.searchApplications(filter == null ? "" : filter, term.isEmpty() ? "" : "%" + term + "%", pageRequest(page, size))
+                .map(AdminWorkflowService::toModel);
     }
 
     @Transactional
@@ -190,6 +207,7 @@ public class AdminWorkflowService {
         String nextType = requireStatus(accountType, ACCOUNT_TYPES);
         String nextName = requireDisplayName(displayName);
         String nextPassword = password == null || password.isBlank() ? null : requirePassword(password);
+        String previousEmail = entity.getEmail();
         boolean emailChanged = !entity.getEmail().equalsIgnoreCase(normalizedEmail);
         boolean roleChanged = !entity.getAccountType().equals(nextType);
         if (roleChanged && hasProtectedAccountData(entity)) {
@@ -212,6 +230,10 @@ public class AdminWorkflowService {
             }
             audit(actor, "account.updated", "account", id);
             accounts.flush();
+            if (emailChanged || roleChanged || nextPassword != null) {
+                // Sessions carry the old email, role and credentials; the account signs in again.
+                sessions.endAll(previousEmail);
+            }
             return toModel(entity);
         } catch (DataIntegrityViolationException exception) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "An account with this email already exists");
@@ -219,12 +241,20 @@ public class AdminWorkflowService {
     }
 
     @Transactional
-    public PlatformAccount changeAccountStatus(String id, String status, String actor) {
+    public PlatformAccount changeAccountStatus(String id, String status, String actor, boolean actorIsSuperAdmin) {
         PlatformAccountEntity entity = accounts.findById(id).orElseThrow(() -> notFound("Platform account"));
         requireNotConfiguredAdmin(entity);
+        if (!actorIsSuperAdmin && PRIVILEGED_ACCOUNT_TYPES.contains(entity.getAccountType())) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Only a super administrator can suspend or reactivate administrator accounts");
+        }
         String nextStatus = requireStatus(status, ACCOUNT_STATUSES);
         entity.changeStatus(nextStatus);
         audit(actor, "account." + nextStatus.toLowerCase(Locale.ROOT), "account", id);
+        if ("SUSPENDED".equals(nextStatus)) {
+            sessions.endAll(entity.getEmail());
+        }
         return toModel(entity);
     }
 
@@ -240,6 +270,7 @@ public class AdminWorkflowService {
         }
         entity.changeAccountType(nextType);
         audit(actor, "account.role_changed", "account", id);
+        sessions.endAll(entity.getEmail());
         return toModel(entity);
     }
 
@@ -249,6 +280,9 @@ public class AdminWorkflowService {
         requireNotConfiguredAdmin(entity);
         entity.setEmailVerified(emailVerified);
         audit(actor, emailVerified ? "account.verified" : "account.verification_pending", "account", id);
+        if (!emailVerified) {
+            sessions.endAll(entity.getEmail());
+        }
         return toModel(entity);
     }
 
@@ -263,6 +297,7 @@ public class AdminWorkflowService {
         }
         accounts.delete(entity);
         audit(actor, "account.deleted", "account", id);
+        sessions.endAll(entity.getEmail());
     }
 
     private void requireNotConfiguredAdmin(PlatformAccountEntity account) {
@@ -300,6 +335,17 @@ public class AdminWorkflowService {
         return rows.stream().map(AdminWorkflowService::toModel).toList();
     }
 
+    /** Paged version of {@link #requests}: newest first, complete (Phase 5D). */
+    @Transactional(readOnly = true)
+    public Page<ServiceRequest> requestsPage(String status, int page, int size) {
+        String filter = optionalStatus(status, REQUEST_STATUSES);
+        PageRequest pageable = pageRequest(page, size);
+        Page<ServiceRequestEntity> rows = filter == null
+                ? requests.findAllByOrderByCreatedAtDesc(pageable)
+                : requests.findByStatusOrderByCreatedAtDesc(filter, pageable);
+        return rows.map(AdminWorkflowService::toModel);
+    }
+
     @Transactional
     public ServiceRequest createRequest(String referenceId, String requestType, String requesterEmail, String actor) {
         String type = requireStatus(requestType, REQUEST_TYPES);
@@ -325,6 +371,34 @@ public class AdminWorkflowService {
     @Transactional(readOnly = true)
     public List<AdminAuditEvent> audit() {
         return auditEvents.findTop100ByOrderByCreatedAtDesc().stream().map(AdminWorkflowService::toModel).toList();
+    }
+
+    /** Paged version of {@link #audit}: newest first, complete (Phase 5D). */
+    @Transactional(readOnly = true)
+    public Page<AdminAuditEvent> auditPage(int page, int size, String search, String resourceType, List<String> labelActions) {
+        String term = search == null ? "" : search.trim().toLowerCase(Locale.ROOT);
+        if (term.length() > 120) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Search may not exceed 120 characters");
+        }
+        String pattern = term.isEmpty() ? "" : "%" + term + "%";
+        List<String> actions = labelActions == null || labelActions.isEmpty() || term.isEmpty()
+                ? List.of("")
+                : labelActions.stream().limit(50).toList();
+        return auditEvents.search(resourceType == null ? "" : resourceType.trim(), pattern, actions, pageRequest(page, size))
+                .map(AdminWorkflowService::toModel);
+    }
+
+    /** Record types present in the audit trail, for the filter. */
+    @Transactional(readOnly = true)
+    public List<String> auditResourceTypes() {
+        return auditEvents.findResourceTypes();
+    }
+
+    private static PageRequest pageRequest(int page, int size) {
+        if (page < 0 || size < 1 || size > 100) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Page must be 0 or more and size 1 to 100");
+        }
+        return PageRequest.of(page, size);
     }
 
     @Transactional(readOnly = true)

@@ -29,4 +29,23 @@ public interface ProviderAvailabilitySlotRepository extends JpaRepository<Provid
 
     List<ProviderAvailabilitySlotEntity> findByProviderApplicationIdAndStatusAndStartsAtAfterOrderByStartsAtAsc(
             String providerApplicationId, String status, Instant startsAt);
+
+    /** Earliest open future slot per provider, for a page of directory entries (one query). */
+    @Query("""
+            select slot.providerApplicationId as providerId, min(slot.startsAt) as startsAt
+            from ProviderAvailabilitySlotEntity slot
+            where slot.providerApplicationId in :providerIds
+              and slot.status = 'OPEN'
+              and slot.startsAt > :now
+            group by slot.providerApplicationId
+            """)
+    List<NextOpenSlot> findNextOpenSlots(
+            @Param("providerIds") java.util.Collection<String> providerIds,
+            @Param("now") Instant now);
+
+    interface NextOpenSlot {
+        String getProviderId();
+
+        Instant getStartsAt();
+    }
 }

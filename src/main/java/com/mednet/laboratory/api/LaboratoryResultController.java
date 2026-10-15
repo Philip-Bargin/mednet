@@ -3,6 +3,7 @@ package com.mednet.laboratory.api;
 import java.util.List;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.data.domain.Page;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -11,10 +12,12 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.mednet.laboratory.app.LaboratoryResultService;
 import com.mednet.laboratory.app.LaboratoryResultService.LaboratoryResultDetails;
+import com.mednet.laboratory.app.LaboratoryResultService.ReviewQueuePage;
+import com.mednet.laboratory.app.LaboratoryResultService;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -41,10 +44,47 @@ public class LaboratoryResultController {
         return service.submit(actor.getName(), requestId, request.summary());
     }
 
+    @GetMapping("/partner/lab-results")
+    @PreAuthorize("hasRole('LABORATORY')")
+    public List<LaboratoryResultDetails> partnerResults(Authentication actor) {
+        return service.partnerResults(actor.getName());
+    }
+
+    /** With {@code page}: paged and complete, optionally one review status (Phase 5D). */
+    @GetMapping(value = "/partner/lab-results", params = "page")
+    @PreAuthorize("hasRole('LABORATORY')")
+    public Page<LaboratoryResultDetails> partnerResultsPage(
+            @RequestParam int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) @Size(max = 20) String status,
+            Authentication actor) {
+        return service.partnerResultsPage(actor.getName(), status, page, size);
+    }
+
     @GetMapping("/patients/me/lab-results")
     @PreAuthorize("hasRole('PATIENT')")
     public List<LaboratoryResultDetails> patientResults(Authentication actor) {
         return service.patientResults(actor.getName());
+    }
+
+    /** With {@code page}: released results, paged and complete (Phase 5D). */
+    @GetMapping(value = "/patients/me/lab-results", params = "page")
+    @PreAuthorize("hasRole('PATIENT')")
+    public Page<LaboratoryResultDetails> patientResultsPage(
+            @RequestParam int page,
+            @RequestParam(defaultValue = "20") int size,
+            Authentication actor) {
+        return service.patientResultsPage(actor.getName(), page, size);
+    }
+
+    /** The provider's review queue across care patients, in one call (Phase 5D). */
+    @GetMapping("/providers/me/lab-review-queue")
+    @PreAuthorize("hasRole('PROVIDER')")
+    public ReviewQueuePage reviewQueue(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            Authentication actor) {
+        return service.reviewQueue(actor.getName(), page, size);
     }
 
     @GetMapping("/patients/me/lab-results/{resultId}")

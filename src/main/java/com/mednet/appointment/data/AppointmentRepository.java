@@ -1,7 +1,8 @@
 package com.mednet.appointment.data;
 
-import java.util.Optional;
 import java.util.Collection;
+import java.util.List;
+import java.util.Optional;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -31,4 +32,13 @@ public interface AppointmentRepository extends JpaRepository<AppointmentEntity, 
     boolean existsByPatientAccountId(String patientAccountId);
 
     boolean existsByProviderApplicationId(String providerApplicationId);
+
+    /** Patients with an appointment in one of the given statuses with this provider. */
+    @Query("""
+            select distinct appointment.patientAccountId from AppointmentEntity appointment
+            where appointment.providerApplicationId = :providerId
+              and appointment.status in :statuses
+            """)
+    List<String> findPatientIdsByProviderAndStatusIn(
+            @Param("providerId") String providerId, @Param("statuses") Collection<String> statuses);
 }

@@ -29,4 +29,11 @@ public interface PatientProviderRecordConsentRepository
     boolean existsByPatientAccountId(String patientAccountId);
 
     boolean existsByProviderApplicationId(String providerApplicationId);
+
+    @Query("""
+            select consent.patientAccountId from PatientProviderRecordConsentEntity consent
+            where consent.providerApplicationId = :providerId
+              and consent.status = 'GRANTED'
+            """)
+    List<String> findGrantedPatientIds(@Param("providerId") String providerId);
 }

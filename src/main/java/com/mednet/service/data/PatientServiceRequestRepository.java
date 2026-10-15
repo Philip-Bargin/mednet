@@ -3,6 +3,8 @@ package com.mednet.service.data;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -29,4 +31,9 @@ public interface PatientServiceRequestRepository extends JpaRepository<PatientSe
     boolean existsByPatientAccountId(String patientAccountId);
 
     boolean existsByAssignedStaffAccountId(String assignedStaffAccountId);
+
+    Page<PatientServiceRequestEntity> findByRequestTypeOrderByCreatedAtDesc(String requestType, Pageable pageable);
+
+    Page<PatientServiceRequestEntity> findByRequestTypeAndStatusInOrderByCreatedAtDesc(
+            String requestType, java.util.Collection<String> statuses, Pageable pageable);
 }

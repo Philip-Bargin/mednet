@@ -3,6 +3,8 @@ package com.mednet.admin.data;
 import java.util.Collection;
 import java.util.List;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface ServiceRequestRepository extends JpaRepository<ServiceRequestEntity, String> {
@@ -11,4 +13,8 @@ public interface ServiceRequestRepository extends JpaRepository<ServiceRequestEn
     List<ServiceRequestEntity> findTop100ByStatusOrderByCreatedAtDesc(String status);
 
     long countByStatusIn(Collection<String> statuses);
+
+    Page<ServiceRequestEntity> findAllByOrderByCreatedAtDesc(Pageable pageable);
+
+    Page<ServiceRequestEntity> findByStatusOrderByCreatedAtDesc(String status, Pageable pageable);
 }

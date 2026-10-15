@@ -55,6 +55,51 @@ class GoogleOAuth2UserServiceTests {
     }
 
     @Test
+    void googleSignInDropsAPasswordThatWasNeverConfirmedByTheMailboxOwner() {
+        PlatformAccountRepository accounts = mock(PlatformAccountRepository.class);
+        ProviderApplicationRepository providers = mock(ProviderApplicationRepository.class);
+        OAuth2UserService<OAuth2UserRequest, OAuth2User> delegate = mock(OAuth2UserService.class);
+        OAuth2UserRequest request = mock(OAuth2UserRequest.class);
+        String email = "owner@example.test";
+        // Someone else signed up with this address; the owner never followed the verification link.
+        PlatformAccountEntity unverified = new PlatformAccountEntity("account-1", email, "PATIENT");
+        unverified.setPasswordHash("hash-chosen-by-someone-else");
+        when(delegate.loadUser(request)).thenReturn(googleUser(email));
+        when(providers.findFirstByEmailIgnoreCaseAndStatusOrderByReviewedAtDesc(email, "APPROVED"))
+                .thenReturn(Optional.empty());
+        when(accounts.findFirstByGoogleSubject("google-subject")).thenReturn(Optional.empty());
+        when(accounts.findFirstByEmailIgnoreCase(email)).thenReturn(Optional.of(unverified));
+        when(accounts.saveAndFlush(unverified)).thenReturn(unverified);
+
+        new GoogleOAuth2UserService(accounts, providers, "root@example.test", delegate).loadUser(request);
+
+        assertThat(unverified.isEmailVerified()).isTrue();
+        assertThat(unverified.getPasswordHash()).isNull();
+    }
+
+    @Test
+    void googleSignInKeepsThePasswordOfAVerifiedAccount() {
+        PlatformAccountRepository accounts = mock(PlatformAccountRepository.class);
+        ProviderApplicationRepository providers = mock(ProviderApplicationRepository.class);
+        OAuth2UserService<OAuth2UserRequest, OAuth2User> delegate = mock(OAuth2UserService.class);
+        OAuth2UserRequest request = mock(OAuth2UserRequest.class);
+        String email = "verified@example.test";
+        PlatformAccountEntity verified = new PlatformAccountEntity("account-1", email, "PATIENT");
+        verified.setPasswordHash("owner-hash");
+        verified.verifyEmail();
+        when(delegate.loadUser(request)).thenReturn(googleUser(email));
+        when(providers.findFirstByEmailIgnoreCaseAndStatusOrderByReviewedAtDesc(email, "APPROVED"))
+                .thenReturn(Optional.empty());
+        when(accounts.findFirstByGoogleSubject("google-subject")).thenReturn(Optional.empty());
+        when(accounts.findFirstByEmailIgnoreCase(email)).thenReturn(Optional.of(verified));
+        when(accounts.saveAndFlush(verified)).thenReturn(verified);
+
+        new GoogleOAuth2UserService(accounts, providers, "root@example.test", delegate).loadUser(request);
+
+        assertThat(verified.getPasswordHash()).isEqualTo("owner-hash");
+    }
+
+    @Test
     void googleSignInDoesNotDowngradeAnAdministratorRole() {
         PlatformAccountRepository accounts = mock(PlatformAccountRepository.class);
         ProviderApplicationRepository providers = mock(ProviderApplicationRepository.class);

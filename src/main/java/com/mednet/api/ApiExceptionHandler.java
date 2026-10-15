@@ -14,6 +14,7 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 import org.springframework.web.server.ResponseStatusException;
 
 import com.mednet.auth.api.AccountAuthController.AuthRequestException;
+import com.mednet.auth.security.RateLimitExceededException;
 
 import jakarta.servlet.http.HttpServletRequest;
 
@@ -24,6 +25,16 @@ public class ApiExceptionHandler {
     public ResponseEntity<ApiErrorResponse> handleAuthRequest(
             AuthRequestException exception, HttpServletRequest request) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", exception.getMessage(), List.of(), request);
+    }
+
+    @ExceptionHandler(RateLimitExceededException.class)
+    public ResponseEntity<ApiErrorResponse> handleRateLimited(
+            RateLimitExceededException exception, HttpServletRequest request) {
+        ResponseEntity<ApiErrorResponse> body = error(
+                HttpStatus.TOO_MANY_REQUESTS, "RATE_LIMITED", exception.getMessage(), List.of(), request);
+        return ResponseEntity.status(body.getStatusCode())
+                .header("Retry-After", Long.toString(exception.getRetryAfterSeconds()))
+                .body(body.getBody());
     }
 
     @ExceptionHandler(ResponseStatusException.class)

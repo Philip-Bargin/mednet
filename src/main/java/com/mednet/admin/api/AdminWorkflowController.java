@@ -56,6 +56,16 @@ public class AdminWorkflowController {
         return service.providers(status);
     }
 
+    /** With {@code page}: paged and complete (Phase 5D); without it the original first-100 list. */
+    @GetMapping(value = "/providers", params = "page")
+    public Page<ProviderApplication> providersPage(
+            @RequestParam int page,
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) @Size(max = 120) String search) {
+        return service.providersPage(status, search, page, size);
+    }
+
     @PostMapping("/providers")
     public ProviderApplication createProvider(
             @Valid @RequestBody CreateProviderRequest request, Authentication actor) {
@@ -104,7 +114,7 @@ public class AdminWorkflowController {
     @PatchMapping("/accounts/{id}/status")
     public PlatformAccount changeAccountStatus(
             @PathVariable String id, @Valid @RequestBody StatusRequest request, Authentication actor) {
-        return service.changeAccountStatus(id, request.status(), actorEmail(actor));
+        return service.changeAccountStatus(id, request.status(), actorEmail(actor), isSuperAdmin(actor));
     }
 
     @PatchMapping("/accounts/{id}/role")
@@ -134,6 +144,15 @@ public class AdminWorkflowController {
         return service.requests(status);
     }
 
+    /** With {@code page}: paged and complete (Phase 5D). */
+    @GetMapping(value = "/requests", params = "page")
+    public Page<ServiceRequest> requestsPage(
+            @RequestParam int page,
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(required = false) String status) {
+        return service.requestsPage(status, page, size);
+    }
+
     @PostMapping("/requests")
     public ServiceRequest createRequest(@Valid @RequestBody CreateRequest request, Authentication actor) {
         return service.createRequest(
@@ -149,6 +168,27 @@ public class AdminWorkflowController {
     @GetMapping("/audit")
     public List<AdminAuditEvent> auditEvents() {
         return service.audit();
+    }
+
+    /** With {@code page}: paged and complete (Phase 5D). */
+    @GetMapping(value = "/audit", params = "page")
+    public Page<AdminAuditEvent> auditPage(
+            @RequestParam int page,
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(required = false) @Size(max = 120) String search,
+            @RequestParam(required = false) @Size(max = 40) String resourceType,
+            @RequestParam(name = "labelAction", required = false) List<String> labelActions) {
+        return service.auditPage(page, size, search, resourceType, labelActions);
+    }
+
+    @GetMapping("/audit/resource-types")
+    public List<String> auditResourceTypes() {
+        return service.auditResourceTypes();
+    }
+
+    private static boolean isSuperAdmin(Authentication actor) {
+        return actor.getAuthorities().stream()
+                .anyMatch(authority -> "ROLE_SUPER_ADMIN".equals(authority.getAuthority()));
     }
 
     private static String actorEmail(Authentication actor) {

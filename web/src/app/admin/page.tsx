@@ -1,13 +1,8 @@
 import type { Metadata } from "next";
-import { AdminPortal } from "@/components/admin-portal";
+import { AdminOverviewPage } from "@/features/admin/overview";
 
-export const metadata: Metadata = {
-  title: "Administration",
-  robots: { index: false, follow: false },
-};
+export const metadata: Metadata = { title: "Overview" };
 
-export const dynamic = "force-dynamic";
-
-export default function AdminPage() {
-  return <AdminPortal />;
+export default function Page() {
+  return <AdminOverviewPage />;
 }

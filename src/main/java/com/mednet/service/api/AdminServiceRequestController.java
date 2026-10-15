@@ -3,6 +3,7 @@ package com.mednet.service.api;
 import java.util.List;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.data.domain.Page;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -13,8 +14,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.mednet.service.app.PatientServiceRequestService;
 import com.mednet.service.app.PatientServiceRequestService.AdminRequestSummary;
+import com.mednet.service.app.PatientServiceRequestService;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -34,6 +35,17 @@ public class AdminServiceRequestController {
     @GetMapping
     public List<AdminRequestSummary> requests(@RequestParam String type, Authentication actor) {
         return service.listForAdministrator(type, actorEmail(actor));
+    }
+
+    /** With {@code page}: paged and complete (Phase 5D); without it the original first-100 list. */
+    @GetMapping(params = "page")
+    public Page<AdminRequestSummary> requestsPage(
+            @RequestParam String type,
+            @RequestParam int page,
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(name = "status", required = false) List<String> statuses,
+            Authentication actor) {
+        return service.pageForAdministrator(type, statuses, actorEmail(actor), page, size);
     }
 
     @PatchMapping("/{id}/status")

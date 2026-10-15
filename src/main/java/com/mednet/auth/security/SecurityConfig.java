@@ -1,23 +1,31 @@
 package com.mednet.auth.security;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.util.Locale;
 import java.util.List;
 import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.InternalAuthenticationServiceException;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
 import org.springframework.security.core.userdetails.User;
-import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.core.session.SessionRegistry;
+import org.springframework.security.core.session.SessionRegistryImpl;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.context.SecurityContextHolderFilter;
+import org.springframework.security.web.session.HttpSessionEventPublisher;
 import org.springframework.security.web.authentication.AuthenticationFailureHandler;
 import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
@@ -39,6 +47,7 @@ import tools.jackson.databind.ObjectMapper;
 
 @Configuration
 @EnableMethodSecurity
+@EnableConfigurationProperties(AuthRateLimitProperties.class)
 public class SecurityConfig {
 
     private static final Logger log = LoggerFactory.getLogger(SecurityConfig.class);
@@ -49,6 +58,23 @@ public class SecurityConfig {
     }
 
     @Bean
+    Clock clock() {
+        return Clock.systemUTC();
+    }
+
+    /** Signed-in sessions per account, so {@link AccountSessions} can end them. */
+    @Bean
+    SessionRegistry sessionRegistry() {
+        return new SessionRegistryImpl();
+    }
+
+    /** Removes destroyed sessions from the registry, keeping it bounded by live sessions. */
+    @Bean
+    static HttpSessionEventPublisher httpSessionEventPublisher() {
+        return new HttpSessionEventPublisher();
+    }
+
+    @Bean
     UserDetailsService userDetailsService(
             @Value("${mednet.admin.email:}") String adminEmail,
             @Value("${mednet.admin.password:}") String adminPassword,
@@ -56,17 +82,19 @@ public class SecurityConfig {
             ObjectProvider<PlatformAccountRepository> accountsProvider,
             ObjectProvider<ProviderApplicationRepository> providersProvider) {
         String normalizedAdminEmail = adminEmail.trim().toLowerCase(Locale.ROOT);
-        UserDetails administrator = normalizedAdminEmail.isBlank() || adminPassword.isBlank()
+        String administratorPasswordHash = normalizedAdminEmail.isBlank() || adminPassword.isBlank()
                 ? null
-                : User.withUsername(normalizedAdminEmail)
-                        .password(passwordEncoder.encode(adminPassword))
-                        .roles("SUPER_ADMIN")
-                        .build();
+                : passwordEncoder.encode(adminPassword);
 
         return username -> {
             String normalizedUsername = username.trim().toLowerCase(Locale.ROOT);
-            if (administrator != null && normalizedAdminEmail.equals(normalizedUsername)) {
-                return administrator;
+            if (administratorPasswordHash != null && normalizedAdminEmail.equals(normalizedUsername)) {
+                // A new instance per lookup: Spring Security erases the credentials of the
+                // authenticated principal, so a shared instance only allows one sign-in.
+                return User.withUsername(normalizedAdminEmail)
+                        .password(administratorPasswordHash)
+                        .roles("SUPER_ADMIN")
+                        .build();
             }
             PlatformAccountRepository accounts = accountsProvider.getIfAvailable();
             if (accounts == null) {
@@ -102,6 +130,11 @@ public class SecurityConfig {
             ObjectProvider<ClientRegistrationRepository> registrations,
             @Value("${mednet.google.enabled:false}") boolean googleEnabled,
             @Value("${server.servlet.session.cookie.secure:true}") boolean secureCookies,
+            @Value("${mednet.session.absolute-timeout:12h}") Duration absoluteSessionTimeout,
+            AuthRateLimiter rateLimiter,
+            ClientAddressResolver clientAddresses,
+            SessionRegistry sessionRegistry,
+            Clock clock,
             ObjectMapper objectMapper) throws Exception {
         CookieCsrfTokenRepository csrfTokenRepository = CookieCsrfTokenRepository.withHttpOnlyFalse();
         csrfTokenRepository.setCookieCustomizer(cookie -> cookie
@@ -109,8 +142,12 @@ public class SecurityConfig {
                 .sameSite("Lax")
                 .secure(secureCookies));
 
-        AuthenticationSuccessHandler loginSuccess = (request, response, authentication) -> response
-                .setStatus(HttpServletResponse.SC_NO_CONTENT);
+        AuthenticationSuccessHandler loginSuccess = (request, response, authentication) -> {
+            SignInRateLimitFilter.clearAccount(rateLimiter, request);
+            response.setStatus(HttpServletResponse.SC_NO_CONTENT);
+        };
+        SignInRateLimitFilter.RateLimitResponseWriter rateLimited =
+                (request, response, exception) -> writeRateLimited(objectMapper, request, response, exception);
         http
                 .csrf(csrf -> csrf.csrfTokenRepository(csrfTokenRepository))
                 .authorizeHttpRequests(authorize -> authorize
@@ -138,16 +175,21 @@ public class SecurityConfig {
                                 "/api/v1/auth/google/status",
                                 "/api/v1/auth/oauth2/**")
                         .permitAll()
+                        // The public provider directory, one provider's entry, specialty counts and open times.
+                        .requestMatchers(HttpMethod.GET, "/api/v1/providers", "/api/v1/providers/*", "/api/v1/providers/*/availability")
+                        .permitAll()
                         .requestMatchers("/api/v1/admin/**", "/api/v1/auth/admin/**")
                         .hasAnyRole("ADMIN", "SUPER_ADMIN")
+                        // Deny by default: every other endpoint needs a signed-in account, and the
+                        // controllers and services still check the role and ownership.
                         .anyRequest()
-                        .permitAll())
+                        .authenticated())
                 .formLogin(form -> form
                         .loginProcessingUrl("/api/v1/auth/login")
                         .usernameParameter("email")
                         .passwordParameter("password")
                         .successHandler(loginSuccess)
-                        .failureHandler(loginFailureHandler(objectMapper)))
+                        .failureHandler(loginFailureHandler(objectMapper, rateLimiter, clientAddresses)))
                 .logout(logout -> logout
                         .logoutUrl("/api/v1/auth/logout")
                         .logoutSuccessHandler((request, response, authentication) -> response
@@ -161,7 +203,19 @@ public class SecurityConfig {
                                 "FORBIDDEN", "You do not have permission to perform this action")))
                 .sessionManagement(session -> session
                         .sessionCreationPolicy(IF_REQUIRED)
-                        .sessionFixation(fixation -> fixation.migrateSession()));
+                        .sessionFixation(fixation -> fixation.migrateSession())
+                        .sessionConcurrency(concurrency -> concurrency
+                                .maximumSessions(-1)
+                                .sessionRegistry(sessionRegistry)
+                                .expiredSessionStrategy(event -> writeError(
+                                        objectMapper, event.getRequest(), event.getResponse(),
+                                        HttpServletResponse.SC_UNAUTHORIZED, "UNAUTHORIZED", "Sign-in required"))))
+                .addFilterBefore(
+                        new SignInRateLimitFilter(rateLimiter, clientAddresses, rateLimited),
+                        UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(
+                        new SessionLifetimeFilter(absoluteSessionTimeout, clock),
+                        SecurityContextHolderFilter.class);
 
         GoogleOAuth2UserService configuredUserService = googleUserService.getIfAvailable();
         if (googleEnabled && configuredUserService != null && registrations.getIfAvailable() != null) {
@@ -178,12 +232,7 @@ public class SecurityConfig {
                                 .filter(authority -> !authority.equals("USER"))
                                 .findFirst()
                                 .orElse("USER");
-                        String destination = switch (role) {
-                            case "ADMIN", "SUPER_ADMIN" -> "/admin";
-                            case "PATIENT" -> "/patient";
-                            default -> "/account";
-                        };
-                        response.sendRedirect(destination);
+                        response.sendRedirect(googleSignInDestination(role));
                     })
                     .failureHandler((request, response, exception) -> {
                         if (exception instanceof OAuth2AuthenticationException oauthException) {
@@ -205,7 +254,24 @@ public class SecurityConfig {
         return http.build();
     }
 
+    /** Where Google sign-in lands for each role; matches the web client's home path per role. */
+    static String googleSignInDestination(String role) {
+        return switch (role) {
+            case "ADMIN", "SUPER_ADMIN" -> "/admin";
+            case "PATIENT" -> "/patient";
+            case "PROVIDER" -> "/provider";
+            case "LABORATORY" -> "/laboratory";
+            case "HOME_CARE" -> "/home-care";
+            default -> "/account";
+        };
+    }
+
     static AuthenticationFailureHandler loginFailureHandler(ObjectMapper objectMapper) {
+        return loginFailureHandler(objectMapper, null, null);
+    }
+
+    static AuthenticationFailureHandler loginFailureHandler(
+            ObjectMapper objectMapper, AuthRateLimiter rateLimiter, ClientAddressResolver clientAddresses) {
         return (request, response, exception) -> {
             if (exception instanceof InternalAuthenticationServiceException) {
                 String requestId = (String) request.getAttribute(ApiRequestIdFilter.ATTRIBUTE_NAME);
@@ -215,10 +281,23 @@ public class SecurityConfig {
                         "SERVICE_UNAVAILABLE", "Sign-in is temporarily unavailable");
                 return;
             }
+            if (rateLimiter != null) {
+                SignInRateLimitFilter.recordFailure(rateLimiter, clientAddresses, request);
+            }
             writeError(
                     objectMapper, request, response, HttpServletResponse.SC_UNAUTHORIZED,
                     "UNAUTHORIZED", "Invalid email or password");
         };
+    }
+
+    private static void writeRateLimited(
+            ObjectMapper objectMapper,
+            HttpServletRequest request,
+            HttpServletResponse response,
+            RateLimitExceededException exception)
+            throws java.io.IOException {
+        response.setHeader("Retry-After", Long.toString(exception.getRetryAfterSeconds()));
+        writeError(objectMapper, request, response, 429, "RATE_LIMITED", RateLimitExceededException.MESSAGE);
     }
 
     private static void writeError(
@@ -238,4 +317,4 @@ public class SecurityConfig {
                 "detail", message,
                 "meta", Map.of("requestId", requestId == null ? "" : requestId)));
     }
-}
+}

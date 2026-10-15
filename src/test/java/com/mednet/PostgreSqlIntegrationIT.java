@@ -26,9 +26,7 @@ class PostgreSqlIntegrationIT {
 
     @DynamicPropertySource
     static void registerPostgreSqlProperties(DynamicPropertyRegistry registry) {
-        registry.add("spring.datasource.url", () -> requiredSetting("MEDNET_TEST_DATABASE_URL"));
-        registry.add("spring.datasource.username", () -> requiredSetting("MEDNET_TEST_DATABASE_USERNAME"));
-        registry.add("spring.datasource.password", () -> requiredSetting("MEDNET_TEST_DATABASE_PASSWORD"));
+        PostgreSqlTestDatabase.register(registry);
     }
 
     @Autowired
@@ -67,13 +65,5 @@ class PostgreSqlIntegrationIT {
         assertThat(persisted.getEmail()).isEqualTo(email);
         assertThat(persisted.getAccountType()).isEqualTo("PATIENT");
         assertThat(persisted.isEmailVerified()).isTrue();
-    }
-
-    private static String requiredSetting(String name) {
-        String value = System.getenv(name);
-        if (value == null || value.isBlank()) {
-            throw new IllegalStateException(name + " must point to a dedicated PostgreSQL test database");
-        }
-        return value;
     }
 }

@@ -28,7 +28,9 @@ the account type field reflects current permissions. The UUID remains an interna
 and is not shown in the admin interface. `GET /api/v1/admin/accounts` supports `page`, `size`
 (maximum 100), `search` (display name, email, or public ID), `status`, `accountType`, and
 `emailVerified` filters. Admins can
-suspend or reactivate accounts. `SUPER_ADMIN` can edit name, email, account type, and password,
+suspend or reactivate non-administrator accounts (an `ADMIN` gets 403 for `ADMIN` or `SUPER_ADMIN` targets; a
+`SUPER_ADMIN` can change any account except the configured administrator). The admin service-request queue includes
+`assignedStaffPublicId` (null until assigned). `SUPER_ADMIN` can edit name, email, account type, and password,
 toggle verification with `PATCH /api/v1/admin/accounts/{id}/verification`, or delete an account.
 New accounts are unverified by default; only verified accounts can sign in. Accounts linked to
 care or clinical records cannot be deleted or have their account type changed, and the configured
@@ -41,7 +43,42 @@ problem.
 
 ## Local development
 
-Follow the root [README](../README.md) to configure PostgreSQL and start the API. Then start the
+Follow the root [README](../README.md) and [PostgreSQL setup](POSTGRESQL_SETUP.md) to configure
+PostgreSQL and start the API. Phase 5A made no API contract change. All six live-API browser suites and the
+backend workflow suite pass against PostgreSQL 17.6 (see `FRONTEND_PROGRESS.md`, Phase 5A). Against a
+distant database, writes such as appointment requests can take several seconds; keep loading states.
+Phase 5B (security): every endpoint not listed as public now answers `401` to signed-out callers
+before validation (public: health, the auth entry points, `GET /providers`,
+`GET /providers/{id}/availability`). Signing up again with the address of an existing unverified
+account resends the verification email and keeps that account's password. Web pages now send
+`X-Frame-Options: DENY` and related headers, so MedNet cannot be embedded in a frame. See
+`SECURITY_AUDIT.md`.
+Phase 5D (performance; additive, backward compatible — every list keeps its old response without `page`):
+- `GET /providers` entries add `nextAvailableAt` (earliest open future slot or null); new public
+  `GET /providers/{id}` (approved only, else 404) and `GET /providers/specialties` (`[{specialty, providers}]`).
+- `GET /providers/me/lab-review-queue?page=&size=` (PROVIDER): `{content: [{patientAccountId, patientName,
+  recordAccess, pendingResults, oldestPendingAt}], totalElements, totalPages, number, size,
+  totalPendingResults, patientsWithoutRecordAccess}`; patients with results awaiting this provider's review
+  (consent granted) first, then care patients without record access. No result text; open results per
+  patient with `GET /patients/{id}/lab-results/pending` as before.
+- With `page` (and `size` ≤ 100): `GET /admin/providers` (+ `status`, `search`), `/admin/requests`,
+  `/admin/audit` (+ `search`, `resourceType`, repeatable `labelAction`), `/admin/service-requests`
+  (+ `type`, repeatable `status`), `/partner/lab-results` (+ `status`), `/patients/me/lab-results` return a
+  Spring page instead of the first 100 rows. `GET /admin/audit/resource-types` lists record types.
+- `GET /partner/service-requests?type=LABORATORY` rows add `latestResult` (`{id, status, createdAt,
+  reviewedAt}` or null; no text).
+Phase 5C (home care): no endpoint or contract change. The web client now uses the existing partner
+endpoints for `HOME_CARE` accounts at `/home-care`: `GET /partner/service-requests?type=HOME_CARE`
+(own assignments: `requestedService`, `locationDescription`, `status`, `scheduledAt`, dates; no patient
+identity), `PATCH /partner/service-requests/{id}/schedule` `{scheduledAt}` (once, future, OPEN and
+unscheduled; `409` otherwise, `400` for a past time) and `PATCH /partner/service-requests/{id}/status`
+`{status: IN_PROGRESS | RESOLVED}` (OPEN with a visit time → IN_PROGRESS → RESOLVED; `409` otherwise,
+`404` for a request not assigned to the caller). Google sign-in now lands `HOME_CARE` on `/home-care`
+(was `/account`), and `/account` forwards home-care staff there.
+Phase 5B closure: authentication and email endpoints can answer `429` with `Retry-After` (seconds) and
+error code `RATE_LIMITED`; show the message and let the user retry later. A session can now end at any
+request (12 hours after sign-in, or when an administrator changes the account); the API answers the usual
+`401`, which the workspaces already turn into a sign-in prompt. Then start the
 web app from `web/`. During local web development, Next.js proxies `/api/v1/*` to the API at
 `http://localhost:8080`; set `MEDNET_API_URL` if the API is listening elsewhere.
 
@@ -57,6 +94,11 @@ The generated OpenAPI reference is the source of truth for exact paths, request 
 schemas, status codes, and parameters. The current guarded MVP includes:
 
 - Account registration, sign-in, session, email verification, password recovery, and Google sign-in status.
+  After a successful Google sign-in the API redirects by role: `ADMIN`/`SUPER_ADMIN` → `/admin`, `PATIENT` → `/patient`, `PROVIDER` (approved application) → `/provider`, `LABORATORY` → `/laboratory`, any other role → `/account`.
+- Laboratory staff read back their own submitted results with `GET /api/v1/partner/lab-results` (`LABORATORY` only;
+  results they authored on requests still assigned to them, newest first, latest 100). Fields: `id`, `requestId`,
+  `summary`, `status` (`PENDING_REVIEW`, `RETURNED`, `RELEASED`), `createdAt`, `reviewedAt`. No patient or reviewer
+  identifier. Read-only: review decisions remain with the doctor.
 - Patient profile, consent-gated records, medications, vitals, and notifications.
 - Provider applications, approved-provider directory, availability, and appointments.
 - Participant-only text conversations associated with confirmed appointments.
@@ -66,6 +108,11 @@ schemas, status codes, and parameters. The current guarded MVP includes:
 Provider availability slots expose `consultationMode` as `IN_PERSON` or `TEXT`; omit it only for
 legacy compatibility, where the backend defaults it to `TEXT`. Appointment responses include the
 selected slot's mode. Only confirmed `TEXT` appointments can open a text consultation.
+
+Appointment responses (`GET/POST/PATCH /api/v1/appointments…`) also include `providerId` (the approved
+provider record id used by `/providers/{id}/availability`, consent and conversations), `providerSpecialty`, and
+`rescheduleRequestedBy` (`PATIENT` or `PROVIDER` while the status is `RESCHEDULE_REQUESTED`, otherwise `null`).
+These fields were added in Phase 4D; they are additive and derived from existing data.
 
 ## Important scope boundaries
 
