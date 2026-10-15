@@ -6,10 +6,11 @@ export async function proxy(request: NextRequest) {
   const key =
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  // Public pages and health checks should still work while the deployment environment is being
+  // populated. Auth-only features will fail gracefully when Supabase is not configured.
   if (!url || !key) {
-    throw new Error(
-      "Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY.",
-    );
+    return NextResponse.next({ request });
   }
 
   let response = NextResponse.next({ request });
