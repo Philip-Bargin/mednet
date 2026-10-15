@@ -71,8 +71,13 @@ password recovery:
 
 Keep `EKDSEND_API_KEY` and `SUPABASE_SECRET_KEY` in the MedNet API environment only. Do not add
 either key to Supabase Edge Function secrets, a `NEXT_PUBLIC_*` variable, or source control. A
-queued message confirms provider acceptance, not final inbox delivery. Check EKDSend delivery
-status and verify that `FROM_EMAIL` is an approved sender if mail is not received.
+queued message confirms provider acceptance, not final inbox delivery. If a message appears as
+sent in EKDSend but is missing from the mailbox, inspect the individual recipient/message event
+(distinguishing accepted or sent from delivered, deferred, bounced, or suppressed where those
+events are available), confirm the exact recipient address, and check spam or quarantine. Also
+verify that `FROM_EMAIL` is an approved sender and that its sending domain's SPF/DKIM configuration
+is valid. MedNet logs the EKDSend message ID and response status for correlating an auth request
+with the provider dashboard; it does not log the recipient or message contents.
 
 ## 4. Existing account migration
 

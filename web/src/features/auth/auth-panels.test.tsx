@@ -162,7 +162,12 @@ describe("SignInPanel", () => {
     await userEvent.type(screen.getByLabelText(/^Password/), "a-valid-password-123");
     await userEvent.click(screen.getByRole("button", { name: "Create account" }));
 
-    expect(await screen.findByRole("status")).toHaveTextContent("send a verification link");
+    const registrationStatus = await screen.findByRole("status");
+    expect(registrationStatus).toHaveTextContent("Thanks for signing up.");
+    expect(registrationStatus).toHaveTextContent(
+      "If this email is eligible for a new MedNet account, a verification link will arrive shortly.",
+    );
+    expect(screen.getByRole("button", { name: "Resend verification email" })).toBeInTheDocument();
     const registerCall = calls.find((call) => call.url === "/api/v1/auth/register");
     expect(JSON.parse(String(registerCall?.init?.body))).toEqual({
       email: "new@b.lr",

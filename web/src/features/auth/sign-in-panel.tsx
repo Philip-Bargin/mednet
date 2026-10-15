@@ -54,6 +54,7 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [registrationSubmitted, setRegistrationSubmitted] = useState(false);
   const [offerResend, setOfferResend] = useState(false);
   const [recoverySent, setRecoverySent] = useState(false);
   const emailRef = useRef<HTMLInputElement>(null);
@@ -77,6 +78,7 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
     setMode(next);
     setError("");
     setMessage("");
+    setRegistrationSubmitted(false);
     setFieldErrors({});
     setOfferResend(false);
     setRecoverySent(false);
@@ -108,12 +110,10 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
         return;
       }
       if (mode === "register") {
-        const result = await register(trimmed, password);
+        await register(trimmed, password);
         switchMode("login");
-        setMessage(
-          result.message ??
-            "We’ve received your request. If a new account can be created for this email, we’ll send a verification link.",
-        );
+        setMessage("Thanks for signing up.");
+        setRegistrationSubmitted(true);
         setOfferResend(true);
       } else if (mode === "resend") {
         const result = await resendVerification(trimmed);
@@ -241,11 +241,16 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
         ) : null}
 
         {error ? (
-          <Alert tone="critical" live="assertive" title={error} action={resendOffer} />
+          <Alert tone="critical" live="assertive" title={error} />
         ) : null}
         {message ? (
-          <Alert tone="success" live="polite" title={message} action={resendOffer} />
+          <Alert tone="success" live="polite" title={message}>
+            {registrationSubmitted
+              ? "If this email is eligible for a new MedNet account, a verification link will arrive shortly."
+              : undefined}
+          </Alert>
         ) : null}
+        {resendOffer}
         {recoverySent ? (
           <ButtonLink href={`/reset?email=${encodeURIComponent(email.trim())}`} variant="secondary" fullWidth>
             Enter your recovery code
