@@ -165,7 +165,11 @@ describe("SignInPanel", () => {
     const registrationStatus = await screen.findByRole("status");
     expect(registrationStatus).toHaveTextContent("Thanks for signing up.");
     expect(registrationStatus).toHaveTextContent(
-      "If this email is eligible for a new MedNet account, a verification link will arrive shortly.",
+      "Enter the six-digit code sent to your email.",
+    );
+    expect(screen.getByRole("link", { name: "Enter six-digit verification code" })).toHaveAttribute(
+      "href",
+      "/verify?email=new%40b.lr",
     );
     expect(screen.getByRole("button", { name: "Resend verification email" })).toBeInTheDocument();
     const registerCall = calls.find((call) => call.url === "/api/v1/auth/register");
@@ -174,6 +178,36 @@ describe("SignInPanel", () => {
       password: "a-valid-password-123",
     });
     expect(supabaseAuth.signUp).not.toHaveBeenCalled();
+  });
+
+  it("shows an actionable message when an account email is already registered", async () => {
+    on("GET", "/api/v1/auth/session", unauthenticated);
+    on("POST", "/api/v1/auth/register", {
+      status: 409,
+      body: {
+        success: false,
+        error: {
+          code: "CONFLICT",
+          message: "An account with this email already exists. Sign in or reset your password.",
+        },
+      },
+    });
+    render(<SignInPanel googleError={false} />);
+    await userEvent.click(await screen.findByText("Create account"));
+    await userEvent.type(screen.getByRole("textbox", { name: /Email address/ }), "existing@b.lr");
+    await userEvent.type(screen.getByLabelText(/^Password/), "a-valid-password-123");
+    await userEvent.click(screen.getByRole("button", { name: "Create account" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "An account with this email already exists.",
+    );
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Reset password" })).toHaveAttribute(
+      "href",
+      "/reset?email=existing%40b.lr",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(screen.getByRole("heading", { name: "Sign in to MedNet" })).toBeInTheDocument();
   });
 
   it("prepares old accounts for recovery and links to the six-digit code step", async () => {
@@ -239,9 +273,80 @@ describe("ResetPasswordPanel", () => {
 });
 
 describe("VerifyEmailPanel", () => {
-  it("reports an incomplete link", async () => {
+  it("verifies a signup with the six-digit email code", async () => {
+    on("GET", "/api/v1/auth/verification-mode", { status: 200, body: { mode: "supabase" } });
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...window.location, search: "?email=p%40b.lr", origin: "http://localhost:3000" },
+    });
     render(<VerifyEmailPanel />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("This verification link is incomplete.");
+    await userEvent.type(await screen.findByRole("textbox", { name: /Six-digit verification code/ }), "123456");
+    await userEvent.click(screen.getByRole("button", { name: "Verify email" }));
+
+    expect(await screen.findByText("Your email address is confirmed. You can now continue to MedNet.")).toBeInTheDocument();
+    expect(supabaseAuth.verifyOtp).toHaveBeenCalledWith({
+      email: "p@b.lr",
+      token: "123456",
+      type: "email",
+    });
+  });
+
+  it("uses the magic-link verification type for codes resent to an unverified account", async () => {
+    on("GET", "/api/v1/auth/verification-mode", { status: 200, body: { mode: "supabase" } });
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...window.location, search: "?email=p%40b.lr&type=magiclink", origin: "http://localhost:3000" },
+    });
+    render(<VerifyEmailPanel />);
+    await userEvent.type(await screen.findByRole("textbox", { name: /Six-digit verification code/ }), "654321");
+    await userEvent.click(screen.getByRole("button", { name: "Verify email" }));
+
+    expect(await screen.findByText("Your email address is confirmed. You can now continue to MedNet.")).toBeInTheDocument();
+    expect(supabaseAuth.verifyOtp).toHaveBeenCalledWith({
+      email: "p@b.lr",
+      token: "654321",
+      type: "magiclink",
+    });
+  });
+
+  it("verifies a legacy account code through the MedNet API", async () => {
+    on("GET", "/api/v1/auth/verification-mode", { status: 200, body: { mode: "legacy" } });
+    on("POST", "/api/v1/auth/verify-code", {
+      status: 200,
+      body: { message: "Email verified. You can now sign in." },
+    });
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...window.location, search: "?email=p%40b.lr", origin: "http://localhost:3000" },
+    });
+    render(<VerifyEmailPanel />);
+    await userEvent.type(await screen.findByRole("textbox", { name: /Six-digit verification code/ }), "012345");
+    await userEvent.click(screen.getByRole("button", { name: "Verify email" }));
+
+    expect(await screen.findByText("Your email address is confirmed. You can now continue to MedNet.")).toBeInTheDocument();
+    expect(supabaseAuth.verifyOtp).not.toHaveBeenCalled();
+    const verifyCall = calls.find((call) => call.url === "/api/v1/auth/verify-code");
+    expect(JSON.parse(String(verifyCall?.init?.body))).toEqual({ email: "p@b.lr", code: "012345" });
+  });
+
+  it("keeps the one-time verification link working for legacy accounts", async () => {
+    on("GET", "/api/v1/auth/verification-mode", { status: 200, body: { mode: "legacy" } });
+    on("GET", "/api/v1/auth/verify", {
+      status: 200,
+      body: { message: "Email verified. You can now sign in." },
+    });
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        ...window.location,
+        search: "?email=p%40b.lr&token=single-use-token",
+        origin: "http://localhost:3000",
+      },
+    });
+    render(<VerifyEmailPanel />);
+
+    expect(await screen.findByText("Your email address is confirmed. You can now continue to MedNet.")).toBeInTheDocument();
+    expect(calls.some((call) => call.url.startsWith("/api/v1/auth/verify?email=p%40b.lr"))).toBe(true);
   });
 
   it("shows success after the callback has verified the email", async () => {
@@ -250,7 +355,7 @@ describe("VerifyEmailPanel", () => {
       value: { ...window.location, search: "?verified=1", origin: "http://localhost:3000" },
     });
     render(<VerifyEmailPanel />);
-    expect(await screen.findByText("Email verified. You can now sign in.")).toBeInTheDocument();
+    expect(await screen.findByText("Your email address is confirmed. You can now continue to MedNet.")).toBeInTheDocument();
   });
 });
 

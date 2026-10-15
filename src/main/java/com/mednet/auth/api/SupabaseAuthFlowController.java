@@ -12,6 +12,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -21,6 +22,7 @@ import org.springframework.web.server.ResponseStatusException;
 import com.mednet.admin.data.PlatformAccountEntity;
 import com.mednet.admin.data.PlatformAccountRepository;
 import com.mednet.auth.email.SupabaseAuthEmailService;
+import com.mednet.auth.email.SupabaseAuthEmailService.EmailAlreadyRegisteredException;
 import com.mednet.auth.email.SupabaseAuthEmailService.EmailDeliveryException;
 import com.mednet.auth.security.AuthRateLimiter;
 import com.mednet.auth.security.ClientAddressResolver;
@@ -36,7 +38,7 @@ import jakarta.validation.constraints.Size;
 @RestController
 @RequestMapping("/api/v1/auth")
 @ConditionalOnProperty(prefix = "mednet.supabase", name = "auth-enabled", havingValue = "true")
-public class SupabaseAuthMigrationController {
+public class SupabaseAuthFlowController {
 
     private static final String INVALID_CREDENTIALS = "Invalid email or password";
 
@@ -49,7 +51,7 @@ public class SupabaseAuthMigrationController {
     private final String configuredAdminEmail;
     private final String configuredAdminPassword;
 
-    public SupabaseAuthMigrationController(
+    public SupabaseAuthFlowController(
             PlatformAccountRepository accounts,
             PasswordEncoder passwordEncoder,
             SupabaseAdminClient supabaseAdmin,
@@ -68,6 +70,11 @@ public class SupabaseAuthMigrationController {
         this.configuredAdminPassword = configuredAdminPassword == null ? "" : configuredAdminPassword;
     }
 
+    @GetMapping("/verification-mode")
+    public VerificationModeResponse verificationMode() {
+        return new VerificationModeResponse("supabase");
+    }
+
     @PostMapping("/register")
     public ResponseEntity<MigrationResponse> register(
             @Valid @RequestBody RegisterRequest request,
@@ -77,9 +84,16 @@ public class SupabaseAuthMigrationController {
         if (request.password().getBytes(StandardCharsets.UTF_8).length > 72) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Password exceeds 72 bytes");
         }
+        if (accounts.findFirstByEmailIgnoreCase(email).isPresent()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "An account with this email already exists. Sign in or reset your password.");
+        }
         try {
             return ResponseEntity.accepted().body(new MigrationResponse(
                     authEmails.register(email, request.password(), request.displayName())));
+        } catch (EmailAlreadyRegisteredException exception) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, exception.getMessage(), exception);
         } catch (SupabaseAdminException | EmailDeliveryException exception) {
             throw new ResponseStatusException(
                     HttpStatus.SERVICE_UNAVAILABLE,
@@ -247,6 +261,9 @@ public class SupabaseAuthMigrationController {
     }
 
     public record MigrationResponse(String message) {
+    }
+
+    public record VerificationModeResponse(String mode) {
     }
 
     public record EmailRequest(@NotBlank @Email @Size(max = 254) String email) {

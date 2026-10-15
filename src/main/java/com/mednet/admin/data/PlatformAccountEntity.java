@@ -44,6 +44,12 @@ public class PlatformAccountEntity {
     @Column(name = "verification_token_expires_at")
     private Instant verificationTokenExpiresAt;
 
+    @Column(name = "verification_code_hash", length = 100)
+    private String verificationCodeHash;
+
+    @Column(name = "verification_code_expires_at")
+    private Instant verificationCodeExpiresAt;
+
     @Column(name = "password_reset_token_hash", length = 64)
     private String passwordResetTokenHash;
 
@@ -131,6 +137,14 @@ public class PlatformAccountEntity {
         return verificationTokenExpiresAt;
     }
 
+    public String getVerificationCodeHash() {
+        return verificationCodeHash;
+    }
+
+    public Instant getVerificationCodeExpiresAt() {
+        return verificationCodeExpiresAt;
+    }
+
     public String getPasswordResetTokenHash() {
         return passwordResetTokenHash;
     }
@@ -162,13 +176,13 @@ public class PlatformAccountEntity {
     public void linkGoogleSubject(String googleSubject) {
         this.googleSubject = googleSubject;
         this.emailVerified = true;
+        clearVerificationTokens();
     }
 
     public void linkSupabaseUser(String supabaseUserId) {
         this.supabaseUserId = supabaseUserId;
         this.emailVerified = true;
-        this.verificationTokenHash = null;
-        this.verificationTokenExpiresAt = null;
+        clearVerificationTokens();
     }
 
     public void changeAccountType(String accountType) {
@@ -179,8 +193,7 @@ public class PlatformAccountEntity {
         if (!this.email.equalsIgnoreCase(email)) {
             this.email = email;
             this.emailVerified = false;
-            this.verificationTokenHash = null;
-            this.verificationTokenExpiresAt = null;
+            clearVerificationTokens();
         }
     }
 
@@ -195,8 +208,7 @@ public class PlatformAccountEntity {
             verifyEmail();
         } else {
             this.emailVerified = false;
-            this.verificationTokenHash = null;
-            this.verificationTokenExpiresAt = null;
+            clearVerificationTokens();
         }
     }
 
@@ -214,10 +226,21 @@ public class PlatformAccountEntity {
         this.verificationTokenExpiresAt = expiresAt;
     }
 
-    public void verifyEmail() {
-        this.emailVerified = true;
+    public void setVerificationCode(String codeHash, Instant expiresAt) {
+        this.verificationCodeHash = codeHash;
+        this.verificationCodeExpiresAt = expiresAt;
+    }
+
+    public void clearVerificationTokens() {
         this.verificationTokenHash = null;
         this.verificationTokenExpiresAt = null;
+        this.verificationCodeHash = null;
+        this.verificationCodeExpiresAt = null;
+    }
+
+    public void verifyEmail() {
+        this.emailVerified = true;
+        clearVerificationTokens();
     }
 
     public void setPasswordResetCode(String tokenHash, Instant expiresAt) {

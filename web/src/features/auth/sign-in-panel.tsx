@@ -54,7 +54,9 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const [registrationSubmitted, setRegistrationSubmitted] = useState(false);
+  const [verificationEmailSent, setVerificationEmailSent] = useState(false);
+  const [verificationCodeType, setVerificationCodeType] = useState<"email" | "magiclink">("email");
+  const [registrationDuplicate, setRegistrationDuplicate] = useState(false);
   const [offerResend, setOfferResend] = useState(false);
   const [recoverySent, setRecoverySent] = useState(false);
   const emailRef = useRef<HTMLInputElement>(null);
@@ -78,7 +80,9 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
     setMode(next);
     setError("");
     setMessage("");
-    setRegistrationSubmitted(false);
+    setVerificationEmailSent(false);
+    setVerificationCodeType("email");
+    setRegistrationDuplicate(false);
     setFieldErrors({});
     setOfferResend(false);
     setRecoverySent(false);
@@ -102,6 +106,7 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
     setMessage("");
     setOfferResend(false);
     setRecoverySent(false);
+    setRegistrationDuplicate(false);
     try {
       if (mode === "login") {
         const session = await signIn(trimmed, password);
@@ -113,19 +118,24 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
         await register(trimmed, password);
         switchMode("login");
         setMessage("Thanks for signing up.");
-        setRegistrationSubmitted(true);
+        setVerificationEmailSent(true);
         setOfferResend(true);
       } else if (mode === "resend") {
         const result = await resendVerification(trimmed);
         switchMode("login");
         setMessage(result.message ?? "If an account with this email needs verification, we will send a new verification link shortly.");
+        setVerificationEmailSent(true);
+        setVerificationCodeType("magiclink");
       } else {
         const result = await requestPasswordReset(trimmed);
         setMessage(result.message ?? "If the account exists, password recovery instructions have been sent.");
         setRecoverySent(true);
       }
     } catch (cause) {
-      if (mode === "login" && cause instanceof ApiRequestError) {
+      if (mode === "register" && cause instanceof ApiRequestError && cause.status === 409) {
+        setError("An account with this email already exists.");
+        setRegistrationDuplicate(true);
+      } else if (mode === "login" && cause instanceof ApiRequestError) {
         if (cause.status === 503) setError("Sign-in is temporarily unavailable. Please try again shortly.");
         else {
           if (cause.status === 401) setOfferResend(true);
@@ -241,14 +251,47 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
         ) : null}
 
         {error ? (
-          <Alert tone="critical" live="assertive" title={error} />
+          <Alert
+            tone="critical"
+            live="assertive"
+            title={error}
+          >
+            {registrationDuplicate
+              ? "Sign in to your existing account, or reset your password if you can’t access it."
+              : undefined}
+          </Alert>
+        ) : null}
+        {registrationDuplicate ? (
+          <div className="-mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-data font-semibold">
+            <button
+              type="button"
+              onClick={() => switchMode("login")}
+              className="min-h-10 rounded-sm text-green-800 hover:underline"
+            >
+              Sign in
+            </button>
+            <Link
+              href={`/reset?email=${encodeURIComponent(email.trim())}`}
+              className="min-h-10 content-center rounded-sm text-green-800 hover:underline"
+            >
+              Reset password
+            </Link>
+          </div>
         ) : null}
         {message ? (
           <Alert tone="success" live="polite" title={message}>
-            {registrationSubmitted
-              ? "If this email is eligible for a new MedNet account, a verification link will arrive shortly."
+            {verificationEmailSent
+              ? "Enter the six-digit code sent to your email. If the code gives you trouble, use the secure verification link in that same email."
               : undefined}
           </Alert>
+        ) : null}
+        {verificationEmailSent ? (
+          <Link
+            href={`/verify?email=${encodeURIComponent(email.trim())}${verificationCodeType === "magiclink" ? "&type=magiclink" : ""}`}
+            className="-mt-3 min-h-10 content-center self-start rounded-sm text-data font-semibold text-green-800 hover:underline"
+          >
+            Enter six-digit verification code
+          </Link>
         ) : null}
         {resendOffer}
         {recoverySent ? (

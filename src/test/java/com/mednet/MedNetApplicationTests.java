@@ -245,6 +245,13 @@ class MedNetApplicationTests {
     }
 
     @Test
+    void verificationModeIsAvailableBeforeAuthentication() throws Exception {
+        mockMvc.perform(get("/api/v1/auth/verification-mode"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.mode").value("legacy"));
+    }
+
+    @Test
     void patientCanCreateAndUpdateOnlyTheirOwnProfile() throws Exception {
         String email = "profile-" + UUID.randomUUID() + "@mednet.test";
         PlatformAccountEntity account = new PlatformAccountEntity(
@@ -966,7 +973,7 @@ class MedNetApplicationTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[?(@.resourceId == '" + requestId + "')].title")
                         .value(org.hamcrest.Matchers.hasItem("A new service request is awaiting assignment")));
-        MvcResult homeCareAccountResult = mockMvc.perform(post("/api/v1/admin/accounts")
+        mockMvc.perform(post("/api/v1/admin/accounts")
                 .with(user(ADMIN_EMAIL).roles("ADMIN"))
                 .with(csrf())
                 .contentType(MediaType.APPLICATION_JSON)
@@ -975,23 +982,31 @@ class MedNetApplicationTests {
                         """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.accountType").value("HOME_CARE"))
-                .andExpect(jsonPath("$.publicId").value(org.hamcrest.Matchers.startsWith("HC-")))
-                .andReturn();
-        String homeCareStaffId = objectMapper.readTree(homeCareAccountResult.getResponse().getContentAsString())
-                .get("id").asText();
-        doAnswer(invocation -> true).when(emailService).send(
-                anyString(), anyString(), anyString(), anyString());
-        mockMvc.perform(post("/api/v1/auth/register")
+                .andExpect(jsonPath("$.publicId").value(org.hamcrest.Matchers.startsWith("HC-")));
+        AtomicReference<String> verificationEmailText = new AtomicReference<>();
+        doAnswer(invocation -> {
+            verificationEmailText.set(invocation.getArgument(3));
+            return true;
+        }).when(emailService).send(anyString(), anyString(), anyString(), anyString());
+        mockMvc.perform(post("/api/v1/auth/resend-verification")
                 .with(csrf())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                        {"email":"homecare-staff@mednet.test","password":"HomeCare-Secure-Password-2026"}
+                        {"email":"homecare-staff@mednet.test"}
                         """))
                 .andExpect(status().isAccepted());
-        PlatformAccountEntity homeCareStaff = accounts.findById(homeCareStaffId).orElseThrow();
-        homeCareStaff.verifyEmail();
-        homeCareStaff.setPasswordHash(passwordEncoder.encode("HomeCare-Secure-Password-2026"));
-        accounts.saveAndFlush(homeCareStaff);
+        Matcher verificationCodeMatcher = Pattern.compile("six-digit MedNet code is: (\\d{6})")
+                .matcher(verificationEmailText.get());
+        assertThat(verificationCodeMatcher.find()).isTrue();
+        mockMvc.perform(post("/api/v1/auth/verify-code")
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"email":"homecare-staff@mednet.test","code":"%s"}
+                        """.formatted(verificationCodeMatcher.group(1))))
+                .andExpect(status().isOk());
+        PlatformAccountEntity homeCareStaff =
+                accounts.findFirstByEmailIgnoreCase("homecare-staff@mednet.test").orElseThrow();
         assertThat(userDetailsService.loadUserByUsername("homecare-staff@mednet.test").getAuthorities())
                 .extracting("authority")
                 .containsExactly("ROLE_HOME_CARE");
@@ -1463,14 +1478,16 @@ class MedNetApplicationTests {
         doAnswer(invocation -> true).when(emailService).send(
                 anyString(), anyString(), anyString(), anyString());
 
-        // Someone who knows the address signs up before the account is verified.
+        // A pending account cannot be replaced by another registration attempt.
         mockMvc.perform(post("/api/v1/auth/register")
                 .with(csrf())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(java.util.Map.of(
                         "email", staffEmail,
                         "password", "Someone-Elses-Password-2026"))))
-                .andExpect(status().isAccepted());
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.message").value(
+                        "An account with this email already exists. Sign in or reset your password."));
 
         PlatformAccountEntity staff = accounts.findFirstByEmailIgnoreCase(staffEmail).orElseThrow();
         assertThat(staff.getAccountType()).isEqualTo("LABORATORY");
@@ -1875,7 +1892,7 @@ class MedNetApplicationTests {
                 .content("{\"email\":\"" + resetEmail + "\"}"))
                 .andExpect(status().isAccepted());
 
-        Matcher codeMatcher = Pattern.compile("reset code is: (\\d{6})").matcher(emailText.get());
+        Matcher codeMatcher = Pattern.compile("six-digit MedNet code is: (\\d{6})").matcher(emailText.get());
         assertThat(codeMatcher.find()).isTrue();
         String oneTimeCode = codeMatcher.group(1);
         assertThat(emailText.get()).contains("/reset?email=").doesNotContain("token=");
@@ -1941,7 +1958,7 @@ class MedNetApplicationTests {
                 .content("{\"email\":\"" + resetEmail + "\"}"))
                 .andExpect(status().isAccepted());
 
-        Matcher codeMatcher = Pattern.compile("reset code is: (\\d{6})").matcher(emailText.get());
+        Matcher codeMatcher = Pattern.compile("six-digit MedNet code is: (\\d{6})").matcher(emailText.get());
         assertThat(codeMatcher.find()).isTrue();
         String issuedCode = codeMatcher.group(1);
         String invalidCode = "000000".equals(issuedCode) ? "000001" : "000000";

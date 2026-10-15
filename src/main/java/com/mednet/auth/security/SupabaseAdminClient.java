@@ -82,12 +82,34 @@ public class SupabaseAdminClient {
                 .body(body)
                 .retrieve()
                 .body(Map.class));
-        if (!(result.get("hashed_token") instanceof String hashedToken)
-                || !(result.get("verification_type") instanceof String verificationType)) {
+        return parseGeneratedEmailLink(result);
+    }
+
+    static GeneratedEmailLink parseGeneratedEmailLink(Map<?, ?> result) {
+        if (result == null) {
+            throw new SupabaseAdminException("Supabase returned an empty authentication link response");
+        }
+        Map<?, ?> properties = result.get("properties") instanceof Map<?, ?> nested
+                ? nested
+                : Map.of();
+        String hashedToken = responseString(result, properties, "hashed_token");
+        String verificationType = responseString(result, properties, "verification_type");
+        String emailOtp = responseString(result, properties, "email_otp");
+        if (!StringUtils.hasText(hashedToken) || !StringUtils.hasText(verificationType)) {
             throw new SupabaseAdminException("Supabase did not return the required authentication link");
         }
-        String emailOtp = result.get("email_otp") instanceof String otp ? otp : null;
+        if (emailOtp == null || !emailOtp.matches("\\d{6}")) {
+            throw new SupabaseAdminException("Supabase did not return a six-digit email verification code");
+        }
         return new GeneratedEmailLink(hashedToken, verificationType, emailOtp);
+    }
+
+    private static String responseString(Map<?, ?> response, Map<?, ?> properties, String key) {
+        Object value = response.get(key);
+        if (!(value instanceof String)) {
+            value = properties.get(key);
+        }
+        return value instanceof String string ? string : null;
     }
 
     public String createUserWithPasswordHash(String email, String passwordHash, String displayName) {

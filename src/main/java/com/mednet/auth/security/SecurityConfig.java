@@ -177,6 +177,8 @@ public class SecurityConfig {
                                 "/api/v1/auth/login",
                                 "/api/v1/auth/register",
                                 "/api/v1/auth/verify",
+                                "/api/v1/auth/verify-code",
+                                "/api/v1/auth/verification-mode",
                                 "/api/v1/auth/resend-verification",
                                 "/api/v1/auth/forgot-password",
                                 "/api/v1/auth/reset-password/verify",

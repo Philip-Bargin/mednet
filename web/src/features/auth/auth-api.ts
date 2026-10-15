@@ -4,6 +4,12 @@ import { getSession, type Session } from "@/lib/api/session";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type MessageResponse = { message?: string };
+export type EmailVerificationMode = "legacy" | "supabase";
+
+export async function getEmailVerificationMode(): Promise<EmailVerificationMode> {
+  const response = await apiRequest<{ mode: EmailVerificationMode }>("/auth/verification-mode");
+  return response.mode;
+}
 
 function callbackUrl(next: string): string {
   const url = new URL("/auth/callback", window.location.origin);
@@ -29,7 +35,7 @@ export async function signIn(email: string, password: string): Promise<Session |
   return getSession();
 }
 
-/** The MedNet API issues Supabase verification tokens and delivers them directly through EKDSend. */
+/** The active MedNet auth mode issues verification credentials and delivers them through EKDSend. */
 export async function register(email: string, password: string): Promise<MessageResponse> {
   return apiRequest<MessageResponse>("/auth/register", {
     method: "POST",
@@ -59,6 +65,33 @@ export async function verifyResetCode(email: string, code: string): Promise<void
   });
   if (error) throw error;
   if (!data.session) throw new Error("Could not verify that code.");
+}
+
+export async function verifyEmailCode(
+  email: string,
+  code: string,
+  type: "email" | "magiclink",
+  mode: EmailVerificationMode,
+): Promise<void> {
+  if (mode === "legacy") {
+    await apiRequest<MessageResponse>("/auth/verify-code", {
+      method: "POST",
+      body: { email, code },
+    });
+    return;
+  }
+  const { error } = await getSupabaseBrowserClient().auth.verifyOtp({
+    email,
+    token: code,
+    type,
+  });
+  if (error) throw error;
+}
+
+export async function verifyLegacyEmailLink(email: string, token: string): Promise<void> {
+  await apiRequest<MessageResponse>("/auth/verify", {
+    query: { email, token },
+  });
 }
 
 export async function resetPassword(password: string): Promise<MessageResponse> {

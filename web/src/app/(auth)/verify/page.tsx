@@ -12,7 +12,7 @@ export default function VerifyPage() {
     <AuthShell
       eyebrow="Account verification"
       title="Confirm your email."
-      description="We are checking the verification link from your email so you can sign in."
+      description="Enter the six-digit code from your email, or use its secure verification link instead."
     >
       <VerifyEmailPanel />
     </AuthShell>

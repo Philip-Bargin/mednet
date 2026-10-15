@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -29,6 +30,7 @@ import com.mednet.admin.data.PlatformAccountEntity;
 import com.mednet.admin.data.PlatformAccountRepository;
 import com.mednet.auth.AuthTokenService;
 import com.mednet.auth.AuthTokenService.IssuedToken;
+import com.mednet.auth.email.AuthEmailTemplate;
 import com.mednet.auth.email.EkdSendEmailService;
 import com.mednet.auth.security.AccountSessions;
 import com.mednet.auth.security.AuthRateLimitProperties;
@@ -42,6 +44,7 @@ import com.mednet.auth.security.ClientAddressResolver;
 public class AccountAuthController {
 
     private static final Duration VERIFICATION_LIFETIME = Duration.ofHours(24);
+    private static final Duration VERIFICATION_CODE_LIFETIME = Duration.ofMinutes(10);
     private static final Duration RESET_CODE_LIFETIME = Duration.ofMinutes(10);
     private static final Duration RESET_TICKET_LIFETIME = Duration.ofMinutes(10);
     private static final int MAX_RESET_CODE_ATTEMPTS = 5;
@@ -84,15 +87,20 @@ public class AccountAuthController {
             account = new PlatformAccountEntity(UUID.randomUUID().toString(), normalizedEmail,
                     requestedAccountType(request.accountType()));
             account.setPasswordHash(passwordEncoder.encode(request.password()));
-        } else if (account.isEmailVerified()) {
-            return ResponseEntity.status(HttpStatus.ACCEPTED).body(registrationResponse());
+        } else {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "An account with this email already exists. Sign in or reset your password.");
         }
-        // An existing unverified account keeps its password (for example one an administrator set
-        // for new staff); signing up again only resends the verification link to the owner.
         if (!sendVerification(account)) {
             return verificationDeliveryFailure();
         }
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(registrationResponse());
+    }
+
+    @GetMapping("/verification-mode")
+    public VerificationModeResponse verificationMode() {
+        return new VerificationModeResponse("legacy");
     }
 
     @PostMapping("/resend-verification")
@@ -130,6 +138,27 @@ public class AccountAuthController {
         return new MessageResponse("Email verified. You can now sign in.");
     }
 
+    @PostMapping("/verify-code")
+    @Transactional
+    public MessageResponse verifyCode(
+            @Valid @RequestBody VerificationCodeRequest request, HttpServletRequest httpRequest) {
+        String normalizedEmail = normalize(request.email());
+        limitVerificationCodeChecks(httpRequest, normalizedEmail);
+        PlatformAccountEntity account = accounts.findFirstByEmailIgnoreCase(normalizedEmail).orElseThrow(
+                () -> new AuthRequestException("Verification code is invalid or expired"));
+        if (account.getVerificationCodeHash() == null
+                || account.getVerificationCodeExpiresAt() == null
+                || account.getVerificationCodeExpiresAt().isBefore(Instant.now())
+                || !passwordEncoder.matches(
+                        "email-verification-otp:" + request.code().trim(),
+                        account.getVerificationCodeHash())) {
+            throw new AuthRequestException("Verification code is invalid or expired");
+        }
+        account.verifyEmail();
+        accounts.save(account);
+        return new MessageResponse("Email verified. You can now sign in.");
+    }
+
     @PostMapping("/forgot-password")
     @Transactional
     public ResponseEntity<MessageResponse> forgotPassword(
@@ -143,12 +172,10 @@ public class AccountAuthController {
                     tokens.hash("password-reset-otp:" + code.raw()), code.expiresAt());
             accounts.save(account);
             String link = publicUrl + "/reset?email=" + encode(account.getEmail());
-            boolean sent = email.send(account.getEmail(), "Your MedNet password reset code",
-                    "<p>Your password reset code is <strong>" + code.raw()
-                            + "</strong>.</p><p>It expires in 10 minutes.</p><p><a href=\"" + link
-                            + "\">Continue password reset</a></p>",
-                    "Your MedNet password reset code is: " + code.raw()
-                            + "\nIt expires in 10 minutes. Continue at: " + link);
+            AuthEmailTemplate.Content content =
+                    AuthEmailTemplate.codeFirst("Reset your MedNet password", code.raw(), link);
+            boolean sent = email.send(
+                    account.getEmail(), "Your MedNet password reset code", content.html(), content.text());
             if (!sent) {
                 account.clearPasswordResetToken();
                 accounts.save(account);
@@ -240,14 +267,30 @@ public class AccountAuthController {
                 limits.getCodeChecksPerAccount());
     }
 
+    private void limitVerificationCodeChecks(HttpServletRequest httpRequest, String normalizedEmail) {
+        AuthRateLimitProperties limits = limiter.properties();
+        limiter.consume("verification-code", "client", clients.resolve(httpRequest),
+                limits.getCodeChecksPerClient());
+        limiter.consume("verification-code", "account", AuthRateLimiter.accountKey(normalizedEmail),
+                limits.getCodeChecksPerAccount());
+    }
+
     private boolean sendVerification(PlatformAccountEntity account) {
         IssuedToken token = tokens.issue(VERIFICATION_LIFETIME);
+        IssuedToken code = tokens.issueNumericCode(VERIFICATION_CODE_LIFETIME);
         account.setVerificationToken(token.hash(), token.expiresAt());
+        account.setVerificationCode(
+                passwordEncoder.encode("email-verification-otp:" + code.raw()), code.expiresAt());
         accounts.save(account);
         String link = publicUrl + "/verify?email=" + encode(account.getEmail()) + "&token=" + encode(token.raw());
-        return email.send(account.getEmail(), "Verify your MedNet email",
-                "<p>Confirm your MedNet email:</p><p><a href=\"" + link + "\">Verify email</a></p>",
-                "Verify your MedNet email: " + link);
+        AuthEmailTemplate.Content content =
+                AuthEmailTemplate.codeFirst("Confirm your MedNet email", code.raw(), link);
+        boolean sent = email.send(account.getEmail(), "Verify your MedNet email", content.html(), content.text());
+        if (!sent) {
+            account.clearVerificationTokens();
+            accounts.save(account);
+        }
+        return sent;
     }
 
     private static String normalize(String email) {
@@ -276,12 +319,12 @@ public class AccountAuthController {
 
     private static MessageResponse registrationResponse() {
         return new MessageResponse(
-                "Thanks for signing up. If this email is eligible for a new MedNet account, a verification link will arrive shortly. If you do not receive it, choose Resend verification email on the sign-in page.");
+                "Thanks for signing up. A six-digit verification code has been sent. If you have trouble with the code, use the secure link in the email.");
     }
 
     private static MessageResponse resendVerificationResponse() {
         return new MessageResponse(
-                "If an account with this email needs verification, we will send a new verification link shortly.");
+                "If an account with this email needs verification, we will send a new six-digit code shortly.");
     }
 
     private static ResponseEntity<MessageResponse> verificationDeliveryFailure() {
@@ -306,6 +349,14 @@ public class AccountAuthController {
     public record ResetCodeRequest(
             @NotBlank @Email @Size(max = 254) String email,
             @NotBlank @Pattern(regexp = "\\d{6}") String code) {
+    }
+
+    public record VerificationCodeRequest(
+            @NotBlank @Email @Size(max = 254) String email,
+            @NotBlank @Pattern(regexp = "\\d{6}") String code) {
+    }
+
+    public record VerificationModeResponse(String mode) {
     }
 
     public record ResetVerificationResponse(String token, String message) {

@@ -69,6 +69,16 @@ password recovery:
    EKDSend `/api/v1/send` using `EKDSEND_API_KEY`.
 4. EKDSend acceptance is checked. The API returns an error if email delivery was not accepted.
 
+Authentication emails present the six-digit code as the primary verification method and include a
+single-use link as an alternate. The `/verify` page accepts the code, and the link is handled by
+the verifier for the active auth mode. The API rejects an incomplete Supabase response instead of
+sending a link-only email when the six-digit code is missing.
+
+When `SUPABASE_AUTH_ENABLED` is false, MedNet uses its database-backed auth controller instead:
+Flyway migration `V17` stores the verification-code hash and expiry alongside the fallback-link
+token, and `/verification-mode` tells the page which verifier to use. Registration and password
+recovery use the same branded, code-first email template in either mode.
+
 Keep `EKDSEND_API_KEY` and `SUPABASE_SECRET_KEY` in the MedNet API environment only. Do not add
 either key to Supabase Edge Function secrets, a `NEXT_PUBLIC_*` variable, or source control. A
 queued message confirms provider acceptance, not final inbox delivery. If a message appears as
@@ -78,6 +88,13 @@ events are available), confirm the exact recipient address, and check spam or qu
 verify that `FROM_EMAIL` is an approved sender and that its sending domain's SPF/DKIM configuration
 is valid. MedNet logs the EKDSend message ID and response status for correlating an auth request
 with the provider dashboard; it does not log the recipient or message contents.
+
+SPF must authorize the exact envelope-sender domain used by the MedNet message. A policy published
+only at `ekddigital.com` does not apply to `mednet.lpad.ekddigital.com`; publish and verify an SPF
+record at the actual sender domain, authorizing only the outbound mail infrastructure in use.
+Likewise, confirm that the DKIM selector in the message's `DKIM-Signature` resolves to the public
+key matching the signing server's private key. A DKIM TXT record existing in DNS is not by itself
+proof that signatures validate.
 
 ## 4. Existing account migration
 
