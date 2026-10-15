@@ -13,7 +13,7 @@ import { ApiRequestError, getSession } from "@/lib/api";
 import {
   GOOGLE_AUTHORIZATION_PATH,
   emailProblem,
-  googleSignInEnabled,
+  googleSignInStatus,
   passwordProblem,
   register,
   requestPasswordReset,
@@ -50,7 +50,11 @@ function goTo(destination: string) {
  */
 export function SignInPanel({ googleError }: { googleError: boolean }) {
   const [sessionChecked, setSessionChecked] = useState(false);
-  const [googleEnabled, setGoogleEnabled] = useState<boolean | null>(null);
+  const [googleStatus, setGoogleStatus] = useState<{
+    enabled: boolean;
+    missingConfiguration: string[];
+  } | null>(null);
+  const [googleStatusUnavailable, setGoogleStatusUnavailable] = useState(false);
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
@@ -71,7 +75,9 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
         else setSessionChecked(true);
       })
       .catch(() => active && setSessionChecked(true));
-    googleSignInEnabled().then((enabled) => active && setGoogleEnabled(enabled));
+    googleSignInStatus()
+      .then((status) => active && setGoogleStatus(status))
+      .catch(() => active && setGoogleStatusUnavailable(true));
     return () => {
       active = false;
     };
@@ -266,14 +272,22 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
 
       <div className="border-t border-border pt-5">
         <p className="mb-3 text-caption font-semibold text-text-secondary">Other sign-in options</p>
-        {googleEnabled === null ? (
+        {googleStatus === null && !googleStatusUnavailable ? (
           <StateMessage kind="loading" layout="inline" title="Checking sign-in availability…" live={false} />
-        ) : googleEnabled ? (
+        ) : googleStatus?.enabled ? (
           <ButtonLink href={GOOGLE_AUTHORIZATION_PATH} prefetch={false} variant="secondary" fullWidth>
             Continue with Google
           </ButtonLink>
+        ) : googleStatusUnavailable ? (
+          <p className="text-data text-text-secondary">
+            Could not check Google sign-in availability. The authentication service may be unreachable; refresh to try
+            again.
+          </p>
         ) : (
-          <p className="text-data text-text-secondary">Google sign-in is not configured for this deployment yet.</p>
+          <p className="text-data text-text-secondary">
+            Google sign-in is unavailable. The API reports missing configuration:{" "}
+            {googleStatus?.missingConfiguration.join(", ") || "OAUTH_REGISTRATION_UNAVAILABLE"}.
+          </p>
         )}
         <p className="mt-3 text-caption text-text-muted">
           Google verifies your email. MedNet keeps access roles and protected data on its backend.

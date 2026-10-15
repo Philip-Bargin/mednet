@@ -40,7 +40,7 @@ beforeEach(() => {
     configurable: true,
     value: { ...window.location, replace, search: "", origin: "http://localhost:3000" },
   });
-  on("GET", "/api/v1/auth/google/status", { status: 200, body: { enabled: false } });
+  on("GET", "/api/v1/auth/google/status", { status: 200, body: { enabled: false, missingConfiguration: [] } });
 });
 
 afterEach(() => vi.unstubAllGlobals());
@@ -146,13 +146,33 @@ describe("SignInPanel", () => {
 
   it("shows the Google error notice and the Google option when enabled", async () => {
     on("GET", "/api/v1/auth/session", unauthenticated);
-    on("GET", "/api/v1/auth/google/status", { status: 200, body: { enabled: true } });
+    on("GET", "/api/v1/auth/google/status", { status: 200, body: { enabled: true, missingConfiguration: [] } });
     render(<SignInPanel googleError />);
     expect(await screen.findByRole("alert")).toHaveTextContent("Google sign-in could not be completed");
     expect(await screen.findByRole("link", { name: "Continue with Google" })).toHaveAttribute(
       "href",
       "/api/v1/auth/oauth2/authorization/google",
     );
+  });
+
+  it("shows the exact missing backend setting names when Google sign-in is unavailable", async () => {
+    on("GET", "/api/v1/auth/session", unauthenticated);
+    on("GET", "/api/v1/auth/google/status", {
+      status: 200,
+      body: {
+        enabled: false,
+        missingConfiguration: ["SPRING_DATASOURCE_URL", "GOOGLE_CLIENT_SECRET"],
+      },
+    });
+    render(<SignInPanel googleError={false} />);
+    expect(await screen.findByText(/SPRING_DATASOURCE_URL, GOOGLE_CLIENT_SECRET/)).toBeInTheDocument();
+  });
+
+  it("does not report Google as unconfigured when the status endpoint fails", async () => {
+    on("GET", "/api/v1/auth/session", unauthenticated);
+    on("GET", "/api/v1/auth/google/status", { status: 503, body: { message: "Unavailable" } });
+    render(<SignInPanel googleError={false} />);
+    expect(await screen.findByText(/Could not check Google sign-in availability/)).toBeInTheDocument();
   });
 });
 

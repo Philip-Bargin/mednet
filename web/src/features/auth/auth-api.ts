@@ -46,14 +46,9 @@ export function verifyEmail(email: string, token: string) {
   return apiRequest<MessageResponse>("/auth/verify", { query: { email, token } });
 }
 
-/** GET /auth/google/status */
-export async function googleSignInEnabled(): Promise<boolean> {
-  try {
-    const status = await apiRequest<{ enabled: boolean }>("/auth/google/status");
-    return status.enabled === true;
-  } catch {
-    return false;
-  }
+/** GET /auth/google/status — contains setting names only, never configured values. */
+export function googleSignInStatus() {
+  return apiRequest<{ enabled: boolean; missingConfiguration: string[] }>("/auth/google/status");
 }
 
 /** Browser navigation target that starts the Google OAuth flow (handled by Spring). */
