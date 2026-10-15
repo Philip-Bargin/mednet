@@ -28,6 +28,22 @@
           "/api-docs",
           "/swagger-ui"
         ],
+        "environmentAllowlist": [
+          "EKDSEND_API_KEY",
+          "EKDSEND_API_URL",
+          "FROM_EMAIL",
+          "GOOGLE_CLIENT_ID",
+          "GOOGLE_CLIENT_SECRET",
+          "GOOGLE_OAUTH_ENABLED",
+          "GOOGLE_REDIRECT_URI",
+          "MEDNET_ADMIN_EMAIL",
+          "MEDNET_ADMIN_PASSWORD",
+          "NEXTAUTH_URL",
+          "SESSION_COOKIE_SECURE",
+          "SPRING_DATASOURCE_PASSWORD",
+          "SPRING_DATASOURCE_URL",
+          "SPRING_DATASOURCE_USERNAME"
+        ],
         "healthCheckPath": "/actuator/health"
       },
       {
