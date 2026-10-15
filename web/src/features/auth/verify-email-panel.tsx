@@ -3,47 +3,27 @@
 import { useEffect, useState } from "react";
 import { ButtonLink } from "@/components/ui/button";
 import { StateMessage } from "@/components/ui/state-message";
-import { verifyEmail } from "./auth-api";
 
 type State = { kind: "loading" } | { kind: "success"; message: string } | { kind: "error"; message: string };
 
-/**
- * The token is single-use. A remounted or re-run effect (React Strict Mode in development, a fast
- * remount) must reuse the first request instead of spending the token twice and reporting failure.
- */
-const submissions = new Map<string, ReturnType<typeof verifyEmail>>();
-
-function verifyOnce(email: string, token: string) {
-  const key = `${email}\n${token}`;
-  let request = submissions.get(key);
-  if (!request) {
-    request = verifyEmail(email, token);
-    submissions.set(key, request);
-  }
-  return request;
-}
-
-/** Confirms the emailed link (`/verify?email=…&token=…`) once, on load. */
+/** The auth callback exchanges the Supabase single-use token before redirecting here. */
 export function VerifyEmailPanel() {
   const [state, setState] = useState<State>({ kind: "loading" });
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const email = params.get("email");
-    const token = params.get("token");
-    if (!email || !token) {
-      // Deferred so the state update does not run synchronously inside the effect.
-      queueMicrotask(() => setState({ kind: "error", message: "This verification link is incomplete." }));
-      return;
-    }
-    verifyOnce(email, token)
-      .then((result) => setState({ kind: "success", message: result.message ?? "Email verified. You can now sign in." }))
-      .catch((error: unknown) =>
-        setState({
-          kind: "error",
-          message: error instanceof Error ? error.message : "This verification link is invalid or expired.",
-        }),
-      );
+    const verified = params.get("verified") === "1";
+    const callbackError = params.get("error") === "auth_callback";
+    queueMicrotask(() => setState(
+      verified
+        ? { kind: "success", message: "Email verified. You can now sign in." }
+        : {
+            kind: "error",
+            message: callbackError
+              ? "This verification link is invalid or expired."
+              : "This verification link is incomplete.",
+          },
+    ));
   }, []);
 
   return (

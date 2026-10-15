@@ -29,6 +29,7 @@ import org.springframework.security.web.session.HttpSessionEventPublisher;
 import org.springframework.security.web.authentication.AuthenticationFailureHandler;
 import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,6 +39,7 @@ import static org.springframework.security.config.http.SessionCreationPolicy.IF_
 
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
 
 import com.mednet.admin.data.PlatformAccountEntity;
 import com.mednet.admin.data.PlatformAccountRepository;
@@ -135,7 +137,9 @@ public class SecurityConfig {
             ClientAddressResolver clientAddresses,
             SessionRegistry sessionRegistry,
             Clock clock,
-            ObjectMapper objectMapper) throws Exception {
+            ObjectMapper objectMapper,
+            ObjectProvider<SupabaseJwtAuthenticationConverter> supabaseJwtConverter,
+            @Value("${mednet.supabase.auth-enabled:false}") boolean supabaseAuthEnabled) throws Exception {
         CookieCsrfTokenRepository csrfTokenRepository = CookieCsrfTokenRepository.withHttpOnlyFalse();
         csrfTokenRepository.setCookieCustomizer(cookie -> cookie
                 .path("/")
@@ -149,7 +153,12 @@ public class SecurityConfig {
         SignInRateLimitFilter.RateLimitResponseWriter rateLimited =
                 (request, response, exception) -> writeRateLimited(objectMapper, request, response, exception);
         http
-                .csrf(csrf -> csrf.csrfTokenRepository(csrfTokenRepository))
+                .csrf(csrf -> {
+                    csrf.csrfTokenRepository(csrfTokenRepository);
+                    if (supabaseAuthEnabled) {
+                        csrf.ignoringRequestMatchers("/api/v1/**");
+                    }
+                })
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(
                                 "/actuator/health",
@@ -173,6 +182,8 @@ public class SecurityConfig {
                                 "/api/v1/auth/reset-password/verify",
                                 "/api/v1/auth/reset-password",
                                 "/api/v1/auth/google/status",
+                                "/api/v1/auth/migrate-legacy",
+                                "/api/v1/auth/prepare-reset",
                                 "/api/v1/auth/oauth2/**")
                         .permitAll()
                         // The public provider directory, one provider's entry, specialty counts and open times.
@@ -184,16 +195,26 @@ public class SecurityConfig {
                         // controllers and services still check the role and ownership.
                         .anyRequest()
                         .authenticated())
-                .formLogin(form -> form
-                        .loginProcessingUrl("/api/v1/auth/login")
-                        .usernameParameter("email")
-                        .passwordParameter("password")
-                        .successHandler(loginSuccess)
-                        .failureHandler(loginFailureHandler(objectMapper, rateLimiter, clientAddresses)))
-                .logout(logout -> logout
-                        .logoutUrl("/api/v1/auth/logout")
-                        .logoutSuccessHandler((request, response, authentication) -> response
-                                .setStatus(HttpServletResponse.SC_NO_CONTENT)))
+                .formLogin(form -> {
+                    if (supabaseAuthEnabled) {
+                        form.disable();
+                    } else {
+                        form.loginProcessingUrl("/api/v1/auth/login")
+                                .usernameParameter("email")
+                                .passwordParameter("password")
+                                .successHandler(loginSuccess)
+                                .failureHandler(loginFailureHandler(objectMapper, rateLimiter, clientAddresses));
+                    }
+                })
+                .logout(logout -> {
+                    if (supabaseAuthEnabled) {
+                        logout.disable();
+                    } else {
+                        logout.logoutUrl("/api/v1/auth/logout")
+                                .logoutSuccessHandler((request, response, authentication) -> response
+                                        .setStatus(HttpServletResponse.SC_NO_CONTENT));
+                    }
+                })
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint((request, response, exception) -> writeError(
                                 objectMapper, request, response, HttpServletResponse.SC_UNAUTHORIZED,
@@ -201,24 +222,36 @@ public class SecurityConfig {
                         .accessDeniedHandler((request, response, exception) -> writeError(
                                 objectMapper, request, response, HttpServletResponse.SC_FORBIDDEN,
                                 "FORBIDDEN", "You do not have permission to perform this action")))
-                .sessionManagement(session -> session
-                        .sessionCreationPolicy(IF_REQUIRED)
-                        .sessionFixation(fixation -> fixation.migrateSession())
-                        .sessionConcurrency(concurrency -> concurrency
-                                .maximumSessions(-1)
-                                .sessionRegistry(sessionRegistry)
-                                .expiredSessionStrategy(event -> writeError(
-                                        objectMapper, event.getRequest(), event.getResponse(),
-                                        HttpServletResponse.SC_UNAUTHORIZED, "UNAUTHORIZED", "Sign-in required"))))
-                .addFilterBefore(
-                        new SignInRateLimitFilter(rateLimiter, clientAddresses, rateLimited),
-                        UsernamePasswordAuthenticationFilter.class)
-                .addFilterAfter(
-                        new SessionLifetimeFilter(absoluteSessionTimeout, clock),
-                        SecurityContextHolderFilter.class);
+                .sessionManagement(session -> {
+                    if (supabaseAuthEnabled) {
+                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS);
+                    } else {
+                        session.sessionCreationPolicy(IF_REQUIRED)
+                                .sessionFixation(fixation -> fixation.migrateSession())
+                                .sessionConcurrency(concurrency -> concurrency
+                                        .maximumSessions(-1)
+                                        .sessionRegistry(sessionRegistry)
+                                        .expiredSessionStrategy(event -> writeError(
+                                                objectMapper, event.getRequest(), event.getResponse(),
+                                                HttpServletResponse.SC_UNAUTHORIZED, "UNAUTHORIZED", "Sign-in required")));
+                    }
+                });
+
+        if (supabaseAuthEnabled) {
+            http.oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt
+                    .jwtAuthenticationConverter(supabaseJwtConverter.getObject())));
+        } else {
+            http.addFilterBefore(
+                    new SignInRateLimitFilter(rateLimiter, clientAddresses, rateLimited),
+                    UsernamePasswordAuthenticationFilter.class);
+            http.addFilterAfter(
+                    new SessionLifetimeFilter(absoluteSessionTimeout, clock),
+                    SecurityContextHolderFilter.class);
+        }
 
         GoogleOAuth2UserService configuredUserService = googleUserService.getIfAvailable();
-        if (googleEnabled && configuredUserService != null && registrations.getIfAvailable() != null) {
+        if (!supabaseAuthEnabled && googleEnabled && configuredUserService != null
+                && registrations.getIfAvailable() != null) {
             http.oauth2Login(oauth2 -> oauth2
                     .authorizationEndpoint(endpoint -> endpoint.baseUri("/api/v1/auth/oauth2/authorization"))
                     .redirectionEndpoint(endpoint -> endpoint.baseUri("/api/v1/auth/oauth2/callback/*"))

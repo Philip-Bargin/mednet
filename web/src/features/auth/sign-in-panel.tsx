@@ -11,14 +11,13 @@ import { SegmentedControl } from "@/components/ui/segmented-control";
 import { StateMessage } from "@/components/ui/state-message";
 import { ApiRequestError, getSession } from "@/lib/api";
 import {
-  GOOGLE_AUTHORIZATION_PATH,
   emailProblem,
-  googleSignInStatus,
   passwordProblem,
   register,
   requestPasswordReset,
   resendVerification,
   signIn,
+  signInWithGoogle,
 } from "./auth-api";
 import { destinationAfterSignIn } from "./destination";
 
@@ -28,7 +27,7 @@ type FieldErrors = { email?: string; password?: string };
 const submitLabels: Record<Mode, string> = {
   login: "Sign in",
   register: "Create account",
-  forgot: "Send recovery code",
+  forgot: "Send recovery instructions",
   resend: "Resend verification email",
 };
 
@@ -44,17 +43,11 @@ function goTo(destination: string) {
 }
 
 /**
- * Sign-in, registration, verification resend and password-recovery request.
- * Contracts and messages are unchanged from the original page; only presentation and the
- * shared API client are new. New accounts start as patients; provider access needs approval.
+ * Supabase sign-in, registration, verification resend and password-recovery request.
+ * New accounts start as patients; provider access needs approval.
  */
 export function SignInPanel({ googleError }: { googleError: boolean }) {
   const [sessionChecked, setSessionChecked] = useState(false);
-  const [googleStatus, setGoogleStatus] = useState<{
-    enabled: boolean;
-    missingConfiguration: string[];
-  } | null>(null);
-  const [googleStatusUnavailable, setGoogleStatusUnavailable] = useState(false);
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
@@ -75,9 +68,6 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
         else setSessionChecked(true);
       })
       .catch(() => active && setSessionChecked(true));
-    googleSignInStatus()
-      .then((status) => active && setGoogleStatus(status))
-      .catch(() => active && setGoogleStatusUnavailable(true));
     return () => {
       active = false;
     };
@@ -139,12 +129,35 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
         if (cause.status === 503) setError("Sign-in is temporarily unavailable. Please try again shortly.");
         else {
           if (cause.status === 401) setOfferResend(true);
-          setError("Sign-in failed. Verify your email and password.");
+          if (cause.status === 409) {
+            setError("This account has already moved to Supabase. Use password recovery to continue.");
+          } else {
+            setError("Sign-in failed. Verify your email and password.");
+          }
         }
+      } else if (
+        mode === "login" &&
+        cause instanceof Error &&
+        "code" in cause &&
+        cause.code === "email_not_confirmed"
+      ) {
+        setOfferResend(true);
+        setError("Verify your email before signing in.");
       } else {
         setError(cause instanceof Error ? cause.message : "Request failed. Try again.");
       }
     } finally {
+      setBusy(false);
+    }
+  }
+
+  async function continueWithGoogle() {
+    setBusy(true);
+    setError("");
+    try {
+      await signInWithGoogle();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Google sign-in could not be started.");
       setBusy(false);
     }
   }
@@ -188,8 +201,7 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
         ) : null}
         {mode === "resend" ? (
           <p className="mt-1 text-data text-text-secondary">
-            Verification uses an emailed link, not a code. If this address has an account awaiting verification, we’ll
-            send a fresh link.
+            If this address has an account awaiting verification, we’ll send a fresh confirmation email.
           </p>
         ) : null}
         {mode === "forgot" ? (
@@ -272,25 +284,11 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
 
       <div className="border-t border-border pt-5">
         <p className="mb-3 text-caption font-semibold text-text-secondary">Other sign-in options</p>
-        {googleStatus === null && !googleStatusUnavailable ? (
-          <StateMessage kind="loading" layout="inline" title="Checking sign-in availability…" live={false} />
-        ) : googleStatus?.enabled ? (
-          <ButtonLink href={GOOGLE_AUTHORIZATION_PATH} prefetch={false} variant="secondary" fullWidth>
-            Continue with Google
-          </ButtonLink>
-        ) : googleStatusUnavailable ? (
-          <p className="text-data text-text-secondary">
-            Could not check Google sign-in availability. The authentication service may be unreachable; refresh to try
-            again.
-          </p>
-        ) : (
-          <p className="text-data text-text-secondary">
-            Google sign-in is unavailable. The API reports missing configuration:{" "}
-            {googleStatus?.missingConfiguration.join(", ") || "OAUTH_REGISTRATION_UNAVAILABLE"}.
-          </p>
-        )}
+        <Button type="button" variant="secondary" fullWidth loading={busy} onClick={() => void continueWithGoogle()}>
+          Continue with Google
+        </Button>
         <p className="mt-3 text-caption text-text-muted">
-          Google verifies your email. MedNet keeps access roles and protected data on its backend.
+          Sign-in is securely handled by Supabase. MedNet keeps access roles and protected data on its backend.
         </p>
       </div>
     </div>

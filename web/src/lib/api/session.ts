@@ -1,5 +1,6 @@
 import { apiRequest } from "./client";
 import { ApiRequestError } from "./errors";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 /** Roles issued by the backend today (see `hasRole` checks in the Spring controllers). */
 export const BACKEND_ROLES = [
@@ -25,7 +26,8 @@ export async function getSession(signal?: AbortSignal): Promise<Session | null> 
   }
 }
 
-/** Ends the session. Mirrors the existing sign-out flow (CSRF + POST /auth/logout). */
-export function signOut(): Promise<void> {
-  return apiRequest<void>("/auth/logout", { method: "POST" });
+/** Ends this browser's Supabase session. */
+export async function signOut(): Promise<void> {
+  const { error } = await getSupabaseBrowserClient().auth.signOut({ scope: "local" });
+  if (error) throw error;
 }

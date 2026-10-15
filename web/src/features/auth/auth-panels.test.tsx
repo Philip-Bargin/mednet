@@ -1,15 +1,28 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { AuthApiError } from "@supabase/supabase-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AccountPanel } from "./account-panel";
 import { ResetPasswordPanel } from "./reset-password-panel";
 import { SignInPanel } from "./sign-in-panel";
 import { VerifyEmailPanel } from "./verify-email-panel";
 
-/**
- * Component tests with a scripted fetch. They check request contracts and UI states only; live
- * behaviour is verified separately against the running Spring Boot API (e2e/auth.live.spec.ts).
- */
+const supabaseAuth = vi.hoisted(() => ({
+  getSession: vi.fn(),
+  signInWithPassword: vi.fn(),
+  signUp: vi.fn(),
+  resend: vi.fn(),
+  resetPasswordForEmail: vi.fn(),
+  verifyOtp: vi.fn(),
+  updateUser: vi.fn(),
+  signOut: vi.fn(),
+  signInWithOAuth: vi.fn(),
+}));
+
+vi.mock("@/lib/supabase/client", () => ({
+  getSupabaseBrowserClient: () => ({ auth: supabaseAuth }),
+}));
+
 type Route = { status: number; body?: unknown };
 const routes = new Map<string, Route[]>();
 const calls: Array<{ url: string; init?: RequestInit }> = [];
@@ -26,10 +39,16 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
   if (key === "GET /api/v1/auth/csrf") return Response.json({ headerName: "X-XSRF-TOKEN", token: "t" });
   if (!queue?.length) throw new Error(`Unexpected request ${key}`);
   const next = queue.length > 1 ? queue.shift()! : queue[0];
-  return next.body === undefined ? new Response(null, { status: next.status }) : Response.json(next.body, { status: next.status });
+  return next.body === undefined
+    ? new Response(null, { status: next.status })
+    : Response.json(next.body, { status: next.status });
 });
 
 const replace = vi.fn();
+const unauthenticated = {
+  status: 401,
+  body: { success: false, error: { code: "UNAUTHORIZED", message: "Sign-in required" } },
+};
 
 beforeEach(() => {
   routes.clear();
@@ -40,12 +59,21 @@ beforeEach(() => {
     configurable: true,
     value: { ...window.location, replace, search: "", origin: "http://localhost:3000" },
   });
-  on("GET", "/api/v1/auth/google/status", { status: 200, body: { enabled: false, missingConfiguration: [] } });
+  supabaseAuth.getSession.mockReset().mockResolvedValue({ data: { session: null }, error: null });
+  supabaseAuth.signInWithPassword.mockReset().mockResolvedValue({ data: { session: null }, error: null });
+  supabaseAuth.signUp.mockReset().mockResolvedValue({ data: { user: {}, session: null }, error: null });
+  supabaseAuth.resend.mockReset().mockResolvedValue({ data: {}, error: null });
+  supabaseAuth.resetPasswordForEmail.mockReset().mockResolvedValue({ data: {}, error: null });
+  supabaseAuth.verifyOtp.mockReset().mockResolvedValue({
+    data: { session: { access_token: "recovery-token" } },
+    error: null,
+  });
+  supabaseAuth.updateUser.mockReset().mockResolvedValue({ data: {}, error: null });
+  supabaseAuth.signOut.mockReset().mockResolvedValue({ error: null });
+  supabaseAuth.signInWithOAuth.mockReset().mockResolvedValue({ data: { url: "https://google.test" }, error: null });
 });
 
 afterEach(() => vi.unstubAllGlobals());
-
-const unauthenticated = { status: 401, body: { success: false, error: { code: "UNAUTHORIZED", message: "Sign-in required" } } };
 
 describe("SignInPanel", () => {
   it("redirects an existing session to the role home", async () => {
@@ -54,134 +82,126 @@ describe("SignInPanel", () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/admin"));
   });
 
-  it("validates fields before calling the API and focuses the first problem", async () => {
+  it("validates fields before attempting Supabase authentication", async () => {
     on("GET", "/api/v1/auth/session", unauthenticated);
     render(<SignInPanel googleError={false} />);
     await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
     const email = screen.getByRole("textbox", { name: /Email address/ });
     expect(email).toHaveAttribute("aria-invalid", "true");
     expect(email).toHaveFocus();
-    expect(calls.some((call) => call.url.includes("/auth/login"))).toBe(false);
+    expect(supabaseAuth.signInWithPassword).not.toHaveBeenCalled();
   });
 
-  it("signs in with a form-encoded body and redirects a patient to /patient", async () => {
+  it("signs in with Supabase and redirects using the backend role", async () => {
     on("GET", "/api/v1/auth/session", unauthenticated, { status: 200, body: { email: "p@b.lr", role: "PATIENT" } });
-    on("POST", "/api/v1/auth/login", { status: 200, body: {} });
     render(<SignInPanel googleError={false} />);
     await userEvent.type(await screen.findByRole("textbox", { name: /Email address/ }), "p@b.lr");
     await userEvent.type(screen.getByLabelText(/^Password/), "correct horse battery");
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/patient"));
-    const login = calls.find((call) => call.url === "/api/v1/auth/login")!;
-    expect(login.init?.headers).toMatchObject({
-      "Content-Type": "application/x-www-form-urlencoded",
-      "X-XSRF-TOKEN": "t",
+    expect(supabaseAuth.signInWithPassword).toHaveBeenCalledWith({
+      email: "p@b.lr",
+      password: "correct horse battery",
     });
-    expect(String(login.init?.body)).toBe("email=p%40b.lr&password=correct+horse+battery");
   });
 
-  it("shows the original failure message and offers verification resend on 401", async () => {
-    on("GET", "/api/v1/auth/session", unauthenticated);
-    on("POST", "/api/v1/auth/login", { status: 401, body: { success: false, error: { code: "UNAUTHORIZED", message: "Invalid email or password" } } });
+  it("migrates a valid legacy BCrypt login, then signs in with Supabase", async () => {
+    on("GET", "/api/v1/auth/session", unauthenticated, { status: 200, body: { email: "p@b.lr", role: "PATIENT" } });
+    on("POST", "/api/v1/auth/migrate-legacy", { status: 200, body: { message: "Migrated" } });
+    supabaseAuth.signInWithPassword
+      .mockResolvedValueOnce({
+        data: { session: null },
+        error: new AuthApiError("Invalid login credentials", 400, "invalid_credentials"),
+      })
+      .mockResolvedValueOnce({ data: { session: { access_token: "new-token" } }, error: null });
+
     render(<SignInPanel googleError={false} />);
     await userEvent.type(await screen.findByRole("textbox", { name: /Email address/ }), "p@b.lr");
-    await userEvent.type(screen.getByLabelText(/^Password/), "wrong-password-1");
+    await userEvent.type(screen.getByLabelText(/^Password/), "correct horse battery");
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Sign-in failed. Verify your email and password.");
-    await userEvent.click(screen.getByRole("button", { name: "Resend verification email" }));
-    expect(screen.getByRole("heading", { name: "Resend verification email" })).toBeInTheDocument();
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/patient"));
+    const migrationCall = calls.find((call) => call.url === "/api/v1/auth/migrate-legacy");
+    expect(JSON.parse(String(migrationCall?.init?.body))).toEqual({
+      email: "p@b.lr",
+      password: "correct horse battery",
+    });
+    expect(supabaseAuth.signInWithPassword).toHaveBeenCalledTimes(2);
   });
 
-  it("explains a 503 as temporarily unavailable", async () => {
+  it("reports a migration service outage without disguising it as bad credentials", async () => {
     on("GET", "/api/v1/auth/session", unauthenticated);
-    on("POST", "/api/v1/auth/login", { status: 503, body: { success: false, error: { code: "SERVICE_UNAVAILABLE", message: "Sign-in is temporarily unavailable" } } });
+    on("POST", "/api/v1/auth/migrate-legacy", {
+      status: 503,
+      body: { success: false, error: { code: "SERVICE_UNAVAILABLE", message: "Migration unavailable" } },
+    });
+    supabaseAuth.signInWithPassword.mockResolvedValue({
+      data: { session: null },
+      error: new AuthApiError("Invalid login credentials", 400, "invalid_credentials"),
+    });
+
     render(<SignInPanel googleError={false} />);
     await userEvent.type(await screen.findByRole("textbox", { name: /Email address/ }), "p@b.lr");
     await userEvent.type(screen.getByLabelText(/^Password/), "any-password-123");
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Sign-in is temporarily unavailable. Please try again shortly.");
-  });
-
-  it("registers, shows the server message, and returns to sign in", async () => {
-    on("GET", "/api/v1/auth/session", unauthenticated);
-    on("POST", "/api/v1/auth/register", { status: 202, body: { message: "Thanks for signing up." } });
-    render(<SignInPanel googleError={false} />);
-    await userEvent.click(await screen.findByText("Create account"));
-    await userEvent.type(screen.getByRole("textbox", { name: /Email address/ }), "new@b.lr");
-    await userEvent.type(screen.getByLabelText(/^Password/), "short");
-    await userEvent.click(screen.getByRole("button", { name: "Create account" }));
-    expect(screen.getByLabelText(/^Password/)).toHaveAccessibleDescription(/At least 12 characters.*Use at least 12 characters/);
-
-    await userEvent.type(screen.getByLabelText(/^Password/), "-but-long-enough");
-    await userEvent.click(screen.getByRole("button", { name: "Create account" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Thanks for signing up.");
-    expect(screen.getByRole("heading", { name: "Sign in to MedNet" })).toBeInTheDocument();
-    const body = JSON.parse(String(calls.find((call) => call.url === "/api/v1/auth/register")!.init?.body));
-    expect(body).toEqual({ email: "new@b.lr", password: "short-but-long-enough" });
-  });
-
-  it("surfaces the backend's plain-message 503 when verification email cannot be sent", async () => {
-    on("GET", "/api/v1/auth/session", unauthenticated);
-    on("POST", "/api/v1/auth/register", { status: 503, body: { message: "Verification email could not be sent. Please try again shortly." } });
-    render(<SignInPanel googleError={false} />);
-    await userEvent.click(await screen.findByText("Create account"));
-    await userEvent.type(screen.getByRole("textbox", { name: /Email address/ }), "new@b.lr");
-    await userEvent.type(screen.getByLabelText(/^Password/), "a-valid-password");
-    await userEvent.click(screen.getByRole("button", { name: "Create account" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Verification email could not be sent. Please try again shortly.");
-  });
-
-  it("sends a recovery code and links to the code-entry step", async () => {
-    on("GET", "/api/v1/auth/session", unauthenticated);
-    on("POST", "/api/v1/auth/forgot-password", { status: 202, body: { message: "If an account exists for this email, password reset instructions will arrive shortly." } });
-    render(<SignInPanel googleError={false} />);
-    await userEvent.click(await screen.findByRole("button", { name: "Forgot password?" }));
-    await userEvent.type(screen.getByRole("textbox", { name: /Email address/ }), "p@b.lr");
-    await userEvent.click(screen.getByRole("button", { name: "Send recovery code" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("password reset instructions");
-    expect(screen.getByRole("link", { name: "Enter your recovery code" })).toHaveAttribute("href", "/reset?email=p%40b.lr");
-  });
-
-  it("shows the Google error notice and the Google option when enabled", async () => {
-    on("GET", "/api/v1/auth/session", unauthenticated);
-    on("GET", "/api/v1/auth/google/status", { status: 200, body: { enabled: true, missingConfiguration: [] } });
-    render(<SignInPanel googleError />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Google sign-in could not be completed");
-    expect(await screen.findByRole("link", { name: "Continue with Google" })).toHaveAttribute(
-      "href",
-      "/api/v1/auth/oauth2/authorization/google",
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Sign-in is temporarily unavailable. Please try again shortly.",
     );
   });
 
-  it("shows the exact missing backend setting names when Google sign-in is unavailable", async () => {
+  it("registers through the API so EKDSend delivers the Supabase verification email", async () => {
     on("GET", "/api/v1/auth/session", unauthenticated);
-    on("GET", "/api/v1/auth/google/status", {
-      status: 200,
-      body: {
-        enabled: false,
-        missingConfiguration: ["SPRING_DATASOURCE_URL", "GOOGLE_CLIENT_SECRET"],
-      },
+    on("POST", "/api/v1/auth/register", {
+      status: 202,
+      body: { message: "If a new account can be created for this email, we will send a verification link." },
     });
     render(<SignInPanel googleError={false} />);
-    expect(await screen.findByText(/SPRING_DATASOURCE_URL, GOOGLE_CLIENT_SECRET/)).toBeInTheDocument();
+    await userEvent.click(await screen.findByText("Create account"));
+    await userEvent.type(screen.getByRole("textbox", { name: /Email address/ }), "new@b.lr");
+    await userEvent.type(screen.getByLabelText(/^Password/), "a-valid-password-123");
+    await userEvent.click(screen.getByRole("button", { name: "Create account" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("send a verification link");
+    const registerCall = calls.find((call) => call.url === "/api/v1/auth/register");
+    expect(JSON.parse(String(registerCall?.init?.body))).toEqual({
+      email: "new@b.lr",
+      password: "a-valid-password-123",
+    });
+    expect(supabaseAuth.signUp).not.toHaveBeenCalled();
   });
 
-  it("does not report Google as unconfigured when the status endpoint fails", async () => {
+  it("prepares old accounts for recovery and links to the six-digit code step", async () => {
     on("GET", "/api/v1/auth/session", unauthenticated);
-    on("GET", "/api/v1/auth/google/status", { status: 503, body: { message: "Unavailable" } });
+    on("POST", "/api/v1/auth/prepare-reset", {
+      status: 202,
+      body: { message: "If the account exists, password recovery instructions have been sent." },
+    });
     render(<SignInPanel googleError={false} />);
-    expect(await screen.findByText(/Could not check Google sign-in availability/)).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: "Forgot password?" }));
+    await userEvent.type(screen.getByRole("textbox", { name: /Email address/ }), "p@b.lr");
+    await userEvent.click(screen.getByRole("button", { name: "Send recovery instructions" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("password recovery instructions");
+    expect(screen.getByRole("link", { name: "Enter your recovery code" })).toHaveAttribute(
+      "href",
+      "/reset?email=p%40b.lr",
+    );
+    expect(supabaseAuth.resetPasswordForEmail).not.toHaveBeenCalled();
+  });
+
+  it("keeps Google OAuth visible and reports a callback error", async () => {
+    on("GET", "/api/v1/auth/session", unauthenticated);
+    render(<SignInPanel googleError />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Google sign-in could not be completed");
+    expect(screen.getByRole("button", { name: "Continue with Google" })).toBeInTheDocument();
   });
 });
 
 describe("ResetPasswordPanel", () => {
-  it("starts at the code step from the email link and completes the reset", async () => {
+  it("verifies the recovery OTP and completes a Supabase password reset", async () => {
     window.history.replaceState = vi.fn();
-    on("POST", "/api/v1/auth/reset-password/verify", { status: 200, body: { token: "reset-token", message: "ok" } });
-    on("POST", "/api/v1/auth/reset-password", { status: 200, body: { message: "Password updated. You can now sign in." } });
-    render(<ResetPasswordPanel initialEmail="p@b.lr" />);
+    render(<ResetPasswordPanel initialEmail="p@b.lr" initialRecovery={false} />);
 
     expect(screen.getByRole("heading", { name: "Enter your recovery code" })).toBeInTheDocument();
     await userEvent.type(screen.getByRole("textbox", { name: /Six-digit code/ }), "12a3456");
@@ -192,12 +212,21 @@ describe("ResetPasswordPanel", () => {
     await userEvent.type(screen.getByLabelText(/^New password/), "a-brand-new-password");
     await userEvent.click(screen.getByRole("button", { name: "Update password" }));
     expect(await screen.findByText("Password updated. You can now sign in.")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Continue to sign in" })).toHaveAttribute("href", "/sign-in");
+    expect(supabaseAuth.verifyOtp).toHaveBeenCalledWith({
+      email: "p@b.lr",
+      token: "123456",
+      type: "recovery",
+    });
+    expect(supabaseAuth.updateUser).toHaveBeenCalledWith({ password: "a-brand-new-password" });
+    expect(supabaseAuth.signOut).toHaveBeenCalledWith({ scope: "local" });
   });
 
-  it("shows the backend's invalid-code message", async () => {
-    on("POST", "/api/v1/auth/reset-password/verify", { status: 400, body: { token: null, message: "The code is invalid or expired. Request a new code." } });
-    render(<ResetPasswordPanel initialEmail="p@b.lr" />);
+  it("shows an invalid-code error returned by Supabase", async () => {
+    supabaseAuth.verifyOtp.mockResolvedValue({
+      data: { session: null },
+      error: new Error("The code is invalid or expired. Request a new code."),
+    });
+    render(<ResetPasswordPanel initialEmail="p@b.lr" initialRecovery={false} />);
     await userEvent.type(screen.getByRole("textbox", { name: /Six-digit code/ }), "000000");
     await userEvent.click(screen.getByRole("button", { name: "Verify code" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("The code is invalid or expired. Request a new code.");
@@ -205,21 +234,18 @@ describe("ResetPasswordPanel", () => {
 });
 
 describe("VerifyEmailPanel", () => {
-  it("reports an incomplete link without calling the API", async () => {
+  it("reports an incomplete link", async () => {
     render(<VerifyEmailPanel />);
     expect(await screen.findByRole("alert")).toHaveTextContent("This verification link is incomplete.");
-    expect(calls).toHaveLength(0);
   });
 
-  it("confirms a valid link", async () => {
+  it("shows success after the callback has verified the email", async () => {
     Object.defineProperty(window, "location", {
       configurable: true,
-      value: { ...window.location, search: "?email=p%40b.lr&token=abc", origin: "http://localhost:3000" },
+      value: { ...window.location, search: "?verified=1", origin: "http://localhost:3000" },
     });
-    on("GET", "/api/v1/auth/verify", { status: 200, body: { message: "Email verified. You can now sign in." } });
     render(<VerifyEmailPanel />);
     expect(await screen.findByText("Email verified. You can now sign in.")).toBeInTheDocument();
-    expect(calls[0].url).toBe("/api/v1/auth/verify?email=p%40b.lr&token=abc");
   });
 });
 
@@ -231,7 +257,7 @@ describe("AccountPanel", () => {
     expect(screen.queryByText("admin@b.lr")).not.toBeInTheDocument();
   });
 
-  it("forwards providers to their workspace (Google sign-in lands them on /account)", async () => {
+  it("forwards providers to their workspace", async () => {
     on("GET", "/api/v1/auth/session", { status: 200, body: { email: "doctor@b.lr", role: "PROVIDER" } });
     render(<AccountPanel />);
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/provider"));
@@ -252,22 +278,20 @@ describe("AccountPanel", () => {
     expect(screen.queryByText("care@b.lr")).not.toBeInTheDocument();
   });
 
-  it("shows the session email and a readable account type, then signs out with CSRF", async () => {
+  it("shows the session email and signs out through Supabase", async () => {
     on("GET", "/api/v1/auth/session", { status: 200, body: { email: "patient@b.lr", role: "PATIENT" } });
-    on("POST", "/api/v1/auth/logout", { status: 204 });
     render(<AccountPanel />);
     expect(await screen.findByText("patient@b.lr")).toBeInTheDocument();
     expect(screen.getByText("Patient")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
     expect(await screen.findByRole("link", { name: "Go to sign in" })).toHaveAttribute("href", "/sign-in");
-    const logout = calls.find((call) => call.init?.method === "POST");
-    expect((logout?.init?.headers as Record<string, string>)["X-XSRF-TOKEN"]).toBe("t");
+    expect(supabaseAuth.signOut).toHaveBeenCalledWith({ scope: "local" });
   });
 
   it("keeps the session and explains a failed sign-out", async () => {
     on("GET", "/api/v1/auth/session", { status: 200, body: { email: "p@b.lr", role: "PATIENT" } });
-    on("POST", "/api/v1/auth/logout", { status: 500 });
+    supabaseAuth.signOut.mockRejectedValue(new Error("Sign-out unavailable"));
     render(<AccountPanel />);
     await userEvent.click(await screen.findByRole("button", { name: "Sign out" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Sign-out failed. Close this browser session and try again.");

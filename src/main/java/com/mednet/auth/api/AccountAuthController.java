@@ -6,7 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.UUID;
 
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -37,7 +37,8 @@ import com.mednet.auth.security.ClientAddressResolver;
 
 @RestController
 @RequestMapping("/api/v1/auth")
-@ConditionalOnProperty(prefix = "spring.datasource", name = "url")
+@ConditionalOnExpression(
+        "'${mednet.supabase.auth-enabled:false}' != 'true' && '${spring.datasource.url:}' != ''")
 public class AccountAuthController {
 
     private static final Duration VERIFICATION_LIFETIME = Duration.ofHours(24);

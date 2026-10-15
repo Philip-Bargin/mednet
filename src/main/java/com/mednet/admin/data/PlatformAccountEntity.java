@@ -29,6 +29,9 @@ public class PlatformAccountEntity {
     @Column(name = "google_subject", unique = true, length = 255)
     private String googleSubject;
 
+    @Column(name = "supabase_user_id", unique = true, length = 36)
+    private String supabaseUserId;
+
     @Column(name = "password_hash", length = 100)
     private String passwordHash;
 
@@ -108,6 +111,10 @@ public class PlatformAccountEntity {
         return googleSubject;
     }
 
+    public String getSupabaseUserId() {
+        return supabaseUserId;
+    }
+
     public String getPasswordHash() {
         return passwordHash;
     }
@@ -155,6 +162,13 @@ public class PlatformAccountEntity {
     public void linkGoogleSubject(String googleSubject) {
         this.googleSubject = googleSubject;
         this.emailVerified = true;
+    }
+
+    public void linkSupabaseUser(String supabaseUserId) {
+        this.supabaseUserId = supabaseUserId;
+        this.emailVerified = true;
+        this.verificationTokenHash = null;
+        this.verificationTokenExpiresAt = null;
     }
 
     public void changeAccountType(String accountType) {

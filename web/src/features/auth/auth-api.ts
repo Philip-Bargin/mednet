@@ -1,60 +1,86 @@
-import { apiRequest, getSession, type Session } from "@/lib/api";
+import { AuthApiError } from "@supabase/supabase-js";
+import { apiRequest } from "@/lib/api/client";
+import { getSession, type Session } from "@/lib/api/session";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
-/**
- * Account-access calls. Contracts: `com.mednet.auth.api.AccountAuthController`,
- * `AdminAuthController` and Spring Security form login (`SecurityConfig`).
- * Each write fetches a fresh CSRF token (handled by `apiRequest`).
- */
 type MessageResponse = { message?: string };
 
-/** POST /auth/login — Spring form login, so the body is form-encoded. 401 = bad credentials or unverified. */
+function callbackUrl(next: string): string {
+  const url = new URL("/auth/callback", window.location.origin);
+  url.searchParams.set("next", next);
+  return url.toString();
+}
+
+/** Authenticate through Supabase, migrating a valid legacy BCrypt login only when necessary. */
 export async function signIn(email: string, password: string): Promise<Session | null> {
-  await apiRequest<void>("/auth/login", { method: "POST", form: { email, password } });
+  const supabase = getSupabaseBrowserClient();
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) {
+    if (!(error instanceof AuthApiError) || error.code !== "invalid_credentials") {
+      throw error;
+    }
+    await apiRequest<MessageResponse>("/auth/migrate-legacy", {
+      method: "POST",
+      body: { email, password },
+    });
+    const migratedLogin = await supabase.auth.signInWithPassword({ email, password });
+    if (migratedLogin.error) throw migratedLogin.error;
+  }
   return getSession();
 }
 
-/** POST /auth/register — 202 with a generic message (never reveals whether the email exists). */
-export function register(email: string, password: string) {
-  return apiRequest<MessageResponse>("/auth/register", { method: "POST", body: { email, password } });
-}
-
-/** POST /auth/resend-verification — 202 with a generic message. */
-export function resendVerification(email: string) {
-  return apiRequest<MessageResponse>("/auth/resend-verification", { method: "POST", body: { email } });
-}
-
-/** POST /auth/forgot-password — 202 with a generic message; emails a six-digit code. */
-export function requestPasswordReset(email: string) {
-  return apiRequest<MessageResponse>("/auth/forgot-password", { method: "POST", body: { email } });
-}
-
-/** POST /auth/reset-password/verify — exchanges the six-digit code for a reset token. */
-export function verifyResetCode(email: string, code: string) {
-  return apiRequest<{ token: string | null; message?: string }>("/auth/reset-password/verify", {
+/** The MedNet API issues Supabase verification tokens and delivers them directly through EKDSend. */
+export async function register(email: string, password: string): Promise<MessageResponse> {
+  return apiRequest<MessageResponse>("/auth/register", {
     method: "POST",
-    body: { email, code },
+    body: { email, password },
   });
 }
 
-/** POST /auth/reset-password */
-export function resetPassword(email: string, token: string, password: string) {
-  return apiRequest<MessageResponse>("/auth/reset-password", { method: "POST", body: { email, token, password } });
+export async function resendVerification(email: string): Promise<MessageResponse> {
+  return apiRequest<MessageResponse>("/auth/resend-verification", {
+    method: "POST",
+    body: { email },
+  });
 }
 
-/** GET /auth/verify — confirms an emailed verification link. */
-export function verifyEmail(email: string, token: string) {
-  return apiRequest<MessageResponse>("/auth/verify", { query: { email, token } });
+export async function requestPasswordReset(email: string): Promise<MessageResponse> {
+  return apiRequest<MessageResponse>("/auth/prepare-reset", {
+    method: "POST",
+    body: { email },
+  });
 }
 
-/** GET /auth/google/status — contains setting names only, never configured values. */
-export function googleSignInStatus() {
-  return apiRequest<{ enabled: boolean; missingConfiguration: string[] }>("/auth/google/status");
+export async function verifyResetCode(email: string, code: string): Promise<void> {
+  const { data, error } = await getSupabaseBrowserClient().auth.verifyOtp({
+    email,
+    token: code,
+    type: "recovery",
+  });
+  if (error) throw error;
+  if (!data.session) throw new Error("Could not verify that code.");
 }
 
-/** Browser navigation target that starts the Google OAuth flow (handled by Spring). */
-export const GOOGLE_AUTHORIZATION_PATH = "/api/v1/auth/oauth2/authorization/google";
+export async function resetPassword(password: string): Promise<MessageResponse> {
+  const supabase = getSupabaseBrowserClient();
+  const { error } = await supabase.auth.updateUser({ password });
+  if (error) throw error;
+  const { error: signOutError } = await supabase.auth.signOut({ scope: "local" });
+  if (signOutError) throw signOutError;
+  return { message: "Password updated. You can now sign in." };
+}
 
-/** Backend limits (CredentialsRequest / ResetPasswordRequest). */
+export async function signInWithGoogle(): Promise<void> {
+  const { error } = await getSupabaseBrowserClient().auth.signInWithOAuth({
+    provider: "google",
+    options: {
+      redirectTo: callbackUrl("/sign-in"),
+      queryParams: { prompt: "select_account" },
+    },
+  });
+  if (error) throw error;
+}
+
 export const PASSWORD_MIN_LENGTH = 12;
 export const PASSWORD_MAX_BYTES = 72;
 

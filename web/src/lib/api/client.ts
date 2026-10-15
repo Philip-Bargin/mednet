@@ -1,4 +1,5 @@
 import { networkError, toApiRequestError } from "./errors";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 /** Every authoritative endpoint lives under this prefix (proxied in development by next.config.ts). */
 export const API_BASE = "/api/v1";
@@ -49,6 +50,20 @@ async function send(url: string, init: RequestInit): Promise<Response> {
   }
 }
 
+async function getAccessToken(): Promise<string | undefined> {
+  if (
+    typeof window === "undefined" ||
+    !process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    (!process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY &&
+      !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
+  ) {
+    return undefined;
+  }
+  const { data, error } = await getSupabaseBrowserClient().auth.getSession();
+  if (error) throw error;
+  return data.session?.access_token;
+}
+
 /**
  * Fetches a fresh CSRF token. The backend issues it per session, so it is requested
  * immediately before each state-changing call (same behaviour as the existing pages).
@@ -82,6 +97,9 @@ export async function apiRequest<T>(
     body = JSON.stringify(options.body);
     headers["Content-Type"] = "application/json";
   }
+
+  const accessToken = await getAccessToken();
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
 
   const response = await send(buildApiUrl(path, options.query), {
     method,

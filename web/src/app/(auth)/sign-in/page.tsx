@@ -15,7 +15,7 @@ export default async function SignInPage({
   searchParams: Promise<{ error?: string | string[] }>;
 }) {
   const params = await searchParams;
-  const googleError = params.error === "google";
+  const googleError = params.error === "google" || params.error === "auth_callback";
   return (
     <AuthShell
       eyebrow="Secure access"

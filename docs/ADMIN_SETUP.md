@@ -2,31 +2,31 @@
 
 ## Initial SUPER_ADMIN
 
-The operator-provisioned `MEDNET_ADMIN_EMAIL` account is the initial `SUPER_ADMIN`. It can access the administration console, change account roles, suspend or reactivate accounts, and delete account records. Public registration can create only `PATIENT` or `PROVIDER` accounts; it can never create an administrator role.
+The operator-provisioned `MEDNET_ADMIN_EMAIL` account is the initial `SUPER_ADMIN`. It can access the administration console, change account roles, suspend or reactivate accounts, and delete account records. Public registration can create only `PATIENT` accounts; it can never create an administrator role. Authentication provider setup and the safe existing-account migration are documented in [Supabase Auth setup](SUPABASE_AUTH_SETUP.md).
 
 For local development, copy the root `.env.example` to `.env` and set local-only values there. Spring Boot imports that file automatically; `.env` is ignored by Git.
 
 For production, set these values in the MedNet environment in LPAD:
 
-| Variable                     | Purpose                                                                 |
-| ---------------------------- | ----------------------------------------------------------------------- |
-| `MEDNET_ADMIN_EMAIL`         | Email used to sign in at `/admin`                                       |
-| `MEDNET_ADMIN_PASSWORD`      | Initial administrator password; store as a secret                       |
-| `SESSION_COOKIE_SECURE`      | Keep `true` behind HTTPS; set `false` only for local HTTP development   |
-| `SPRING_DATASOURCE_URL`      | PostgreSQL JDBC URL, for example `jdbc:postgresql://<host>:5432/mednet` |
-| `SPRING_DATASOURCE_USERNAME` | PostgreSQL application user                                             |
-| `SPRING_DATASOURCE_PASSWORD` | PostgreSQL password; store as a secret                                  |
-| `GOOGLE_OAUTH_ENABLED`       | Legacy compatibility flag; credentials automatically enable Google      |
-| `GOOGLE_CLIENT_ID`           | Google OAuth web client ID; server-side only                            |
-| `GOOGLE_CLIENT_SECRET`       | Google OAuth client secret; store as a secret                           |
-| `GOOGLE_REDIRECT_URI`        | OAuth callback URI registered in Google Cloud                           |
-| `EKDSEND_API_URL`            | EKDSend API base URL; defaults to `https://es.ekddigital.com/api/v1`   |
-| `EKDSEND_API_KEY`            | Server-side EKDSend API key; store as a secret                          |
-| `FROM_EMAIL`                 | Verified sender address; defaults to `support@ekddigital.com`            |
+| Variable | Purpose |
+| --- | --- |
+| `MEDNET_ADMIN_EMAIL` | Initial administrator email; receives `SUPER_ADMIN` after verified Supabase sign-in |
+| `MEDNET_ADMIN_PASSWORD` | Initial/legacy administrator password; store as a server-side secret |
+| `SUPABASE_AUTH_ENABLED` | Set `true` to enable Supabase JWT auth and disable Spring session login |
+| `SUPABASE_URL` | Supabase project URL; server-side |
+| `SUPABASE_SECRET_KEY` | Supabase server-only key for auth user checks and rolling migration |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL used by the web client |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Publishable/anon key only; validated before client bundling |
+| `SPRING_DATASOURCE_URL` | PostgreSQL JDBC URL, for example `jdbc:postgresql://<host>:5432/mednet` |
+| `SPRING_DATASOURCE_USERNAME` | PostgreSQL application user |
+| `SPRING_DATASOURCE_PASSWORD` | PostgreSQL password; store as a secret |
+| `EKDSEND_API_URL` | EKDSend API base URL; defaults to `https://es.ekddigital.com/api/v1` |
+| `EKDSEND_API_KEY` | Server-only EKDSend API key used by the MedNet API for authentication mail; store as a secret |
+| `FROM_EMAIL` | Verified sender address; defaults to `support@ekddigital.com` |
 
 Do not put production credentials in Git, `.lpad/manifest.json`, or public frontend variables. Use a long, unique password and rotate it by changing the LPAD secret and restarting the API service. The committed `.env.example` contains placeholders only, never usable credentials.
 
-The API hashes the configured password with BCrypt at startup and authenticates the configured `SUPER_ADMIN` without querying the database during login. When PostgreSQL is configured, startup also creates or corrects the matching account row to `SUPER_ADMIN`, active, and email-verified. The configured password remains the login credential; the account row's password is not used for this configured administrator. The configured administrator account cannot be suspended, demoted, or deleted through the account APIs. The API uses an HTTP-only session cookie and CSRF protection for login and logout. The admin routes return `401` until valid credentials are configured. Flyway creates the admin workflow tables when the PostgreSQL datasource is present.
+When Supabase Auth is enabled, the browser signs in with Supabase and sends its access JWT to the API. The API verifies the JWT and resolves the account role/status from `platform_accounts`; it never trusts a role supplied by the browser. The configured administrator account cannot be suspended, demoted, or deleted through the account APIs. The initial administrator uses the configured legacy password once to migrate into Supabase or can use Google with the configured administrator email. Flyway creates the auth identity mapping and admin workflow tables when the PostgreSQL datasource is present.
 
 ## Database
 
@@ -34,34 +34,21 @@ Local PostgreSQL roles, databases and test commands are described in [PostgreSQL
 
 ## Security notes (Phase 5B)
 
-See [Security audit](SECURITY_AUDIT.md). For staff onboarding: a sign-up with the address of an account that is still pending verification no longer changes its password; it only resends the verification email to the owner. If staff first sign in with Google before their account is verified, the administrator-set initial password is removed and they continue with Google or a password reset. The configured super administrator's Google account (if Google sign-in is enabled) grants `SUPER_ADMIN`, so protect it with 2-step verification. Set `NEXTAUTH_URL` to the public web origin so verification and reset emails link to the right site. Sign-in, sign-up, email and reset-code endpoints are rate limited (see the security audit for limits); set `MEDNET_TRUSTED_PROXIES` to the reverse proxy's address range, or every visitor shares the proxy's allowance, and do not run more than one API instance until the counters are shared. Sessions end after 30 minutes idle (`SESSION_IDLE_TIMEOUT`) and 12 hours after sign-in (`SESSION_ABSOLUTE_TIMEOUT`). Suspending an account, changing its role, email or password, withdrawing its verification or deleting it signs that person out immediately; a completed password reset does the same.
+See [Security audit](SECURITY_AUDIT.md). Protect the configured administrator's Google account with multi-factor authentication. Set `MEDNET_TRUSTED_PROXIES` to the reverse proxy's address range so the legacy-password migration and email recovery rate limits use the actual client address. Supabase session lifetime and refresh behavior are configured in Supabase Auth; the API loads roles/status from the database on each request so suspension and role changes take effect without waiting for the access token to expire.
 
 ## Account email delivery
 
-MedNet uses the server-side EKDSend API for account verification, resend-verification, forgot-password, and password-reset messages. Configure `EKDSEND_API_URL`, `EKDSEND_API_KEY`, and a verified sender address in `FROM_EMAIL` in LPAD or the local `.env`; keep the API key server-only. MedNet sends the `type`, `to`, `from`, `subject`, `body`, and `text` fields (plus `html` for compatibility) and authenticates with the API key headers used by the other EKD projects. A verification request is considered queued only when EKDSend returns `success: true` or its documented queued-response shape with a message ID and accepted status. The API logs the returned message ID and status, never credentials, recipient addresses, or message content. An unconfirmed HTTP-success response or provider error returns a service-unavailable error instead of claiming the email was queued.
+The MedNet API requests single-use Supabase verification/recovery tokens and sends the email directly through EKDSend. No Supabase email hook, Edge Function, SMTP sender, or hook secret is used. Keep `EKDSEND_API_KEY` server-side in the MedNet API environment, never in the browser or Git.
 
-Registration and resend intentionally return privacy-preserving responses. The verification email is sent only for an account that exists and is not yet verified; unknown or already verified addresses do not trigger email. Verification is completed through a link, not a numeric code. If the API confirms that EKDSend queued a message but it never reaches the inbox, inspect the message ID/status in EKDSend delivery logs and verify that `FROM_EMAIL` is an approved sender for the configured EKDSend account; check spam and provider suppression/bounce details as well. A queued status confirms acceptance by EKDSend, not final inbox delivery. Password recovery sends a six-digit code that expires after 10 minutes; five invalid attempts invalidate it. The password form is unlocked only after server verification, and the resulting reset ticket is single-use.
+Registration and resend use privacy-preserving responses. Confirmation uses the secure callback link; password recovery supports the secure link and Supabase's one-time code. For delivery failures, inspect EKDSend's delivery status and verify that `FROM_EMAIL` is an approved sender. A queued message confirms provider acceptance, not final inbox delivery.
 
 ## Google sign-in
 
-Google sign-in is implemented by Spring Security OAuth2, not NextAuth. The `NEXTAUTH_URL` and `NEXTAUTH_SECRET` variables are not used by this app and should not be treated as enabling Google login.
-
-Create a Google OAuth client with application type **Web application**. Add these authorized redirect URIs:
-
-- Local: `http://localhost:8080/api/v1/auth/oauth2/callback/google`
-- Production: `https://mednet.lpad.ekddigital.com/api/v1/auth/oauth2/callback/google`
-
-Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and the environment-specific `GOOGLE_REDIRECT_URI` in `.env` locally or LPAD for production. Google is automatically enabled when the client credentials are present. The Google client secret stays on the Spring server; never prefix it with `NEXT_PUBLIC_` or expose it to the web client.
+Google sign-in is configured as a Supabase Auth provider. Register the exact Supabase callback URL displayed in the Supabase Google provider settings in Google Cloud, then add the MedNet `/auth/callback` URL to Supabase's redirect allowlist. Do not use the retired Spring callback. See [Supabase Auth setup](SUPABASE_AUTH_SETUP.md) for the full provider steps.
 
 All grouped services in an LPAD project receive the project's configured environment variables during build and runtime. Keep secrets in the LPAD project environment, never in source code or client bundles. Treat services in one project as sharing the same secret access; use separate LPAD projects if services need different secret privileges.
 
-Use `GET /api/v1/auth/google/status` to verify the running API, not only the LPAD environment-variable list. When disabled, its `missingConfiguration` array names settings that prevent OAuth activation; it never returns configured values. If all settings are present but the array reports `OAUTH_REGISTRATION_UNAVAILABLE`, inspect the API startup logs and redeploy/restart the API service.
-
-The API validates Google's OpenID ID token using Google's published signing-key endpoint (`https://www.googleapis.com/oauth2/v3/certs`). Keep that JWK Set URI configured on the Google client registration; without it, Google returns to `/sign-in?error=google` and the API logs `missing_signature_verifier`.
-
-Only verified Google email addresses are accepted. The email matching `MEDNET_ADMIN_EMAIL` receives the `SUPER_ADMIN` role; other new Google accounts default to patient access. A provider role is assigned only when an administrator has approved an application for that email. Existing `ADMIN` and `SUPER_ADMIN` account roles remain in force at Google sign-in. The OIDC callback links the verified identity to the MedNet account, persists the MedNet role, and sends patients to `/patient`; that dashboard shows appointment and service-request counts only, not clinical details. Google login also requires the PostgreSQL datasource because account identity is persisted there.
-
-If Google returns to `/sign-in?error=google`, the page shows a generic recovery message while the API logs a provider error code or a MedNet account-policy rejection. Confirm the registered redirect URI above and inspect the API logs; never include client secrets or tokens in support reports.
+Google returns to the MedNet Supabase callback and receives its MedNet role from the API after sign-in. If Google returns an auth callback error, verify the configured Supabase provider callback and redirect allowlist; never include OAuth client secrets or tokens in support reports.
 
 ## Current scope
 

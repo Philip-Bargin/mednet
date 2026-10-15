@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Alert } from "@/components/ui/alert";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { TextInput } from "@/components/ui/inputs";
@@ -9,6 +9,7 @@ import { Stepper } from "@/components/ui/navigation";
 import { PasswordField } from "@/components/ui/password-field";
 import { StateMessage } from "@/components/ui/state-message";
 import { emailProblem, passwordProblem, requestPasswordReset, resetPassword, verifyResetCode } from "./auth-api";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type Step = "request" | "verify" | "reset" | "done";
 const stepIndex: Record<Step, number> = { request: 0, verify: 1, reset: 2, done: 2 };
@@ -25,16 +26,46 @@ const copy: Record<Step, { title: string; description: string }> = {
  * `/reset?email=…` (the link in the reset email) starts at the code step. Same endpoints and
  * messages as the original page.
  */
-export function ResetPasswordPanel({ initialEmail }: { initialEmail: string }) {
-  const [step, setStep] = useState<Step>(initialEmail ? "verify" : "request");
+export function ResetPasswordPanel({
+  initialEmail,
+  initialRecovery,
+}: {
+  initialEmail: string;
+  initialRecovery: boolean;
+}) {
+  const [step, setStep] = useState<Step>(
+    initialRecovery ? "reset" : initialEmail ? "verify" : "request",
+  );
   const [email, setEmail] = useState(initialEmail);
   const [code, setCode] = useState("");
-  const [resetToken, setResetToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [fieldError, setFieldError] = useState<string | undefined>();
   const fieldRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!initialRecovery) return;
+    let cancelled = false;
+    async function validateRecoverySession() {
+      try {
+        const { data, error: sessionError } = await getSupabaseBrowserClient().auth.getSession();
+        if (!cancelled && (sessionError || !data.session)) {
+          setError("This recovery link is invalid or expired. Request a new password reset.");
+          setStep("request");
+        }
+      } catch (cause) {
+        if (!cancelled) {
+          setError(cause instanceof Error ? cause.message : "Could not verify the recovery session.");
+          setStep("request");
+        }
+      }
+    }
+    void validateRecoverySession();
+    return () => {
+      cancelled = true;
+    };
+  }, [initialRecovery]);
 
   function fail(cause: unknown, fallback: string) {
     setError(cause instanceof Error ? cause.message : fallback);
@@ -72,9 +103,7 @@ export function ResetPasswordPanel({ initialEmail }: { initialEmail: string }) {
     setError("");
     setMessage("");
     try {
-      const result = await verifyResetCode(email.trim(), code);
-      if (!result.token) throw new Error("Could not verify that code.");
-      setResetToken(result.token);
+      await verifyResetCode(email.trim(), code);
       setStep("reset");
       // Remove the email from the address bar once it is no longer needed.
       window.history.replaceState(null, "", "/reset");
@@ -94,9 +123,8 @@ export function ResetPasswordPanel({ initialEmail }: { initialEmail: string }) {
     setBusy(true);
     setError("");
     try {
-      const result = await resetPassword(email.trim(), resetToken, password);
+      const result = await resetPassword(password);
       setMessage(result.message ?? "Password updated. You can now sign in.");
-      setResetToken("");
       setCode("");
       setStep("done");
     } catch (cause) {

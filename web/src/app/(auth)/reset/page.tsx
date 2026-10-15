@@ -12,17 +12,18 @@ export const dynamic = "force-dynamic";
 export default async function ResetPage({
   searchParams,
 }: {
-  searchParams: Promise<{ email?: string | string[] }>;
+  searchParams: Promise<{ email?: string | string[]; recovery?: string | string[] }>;
 }) {
   const params = await searchParams;
   const email = typeof params.email === "string" ? params.email : "";
+  const initialRecovery = params.recovery === "1";
   return (
     <AuthShell
       eyebrow="Account security"
       title="Reset your password."
-      description="We email a one-time six-digit code to confirm it is you, then you choose a new password."
+      description="Use the emailed recovery code or secure link to confirm it is you, then choose a new password."
     >
-      <ResetPasswordPanel initialEmail={email} />
+      <ResetPasswordPanel initialEmail={email} initialRecovery={initialRecovery} />
     </AuthShell>
   );
 }
