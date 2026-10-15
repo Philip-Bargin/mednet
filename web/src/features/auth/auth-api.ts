@@ -3,6 +3,11 @@ import { getSession, type Session } from "@/lib/api/session";
 
 type MessageResponse = { message?: string };
 
+export async function googleAuthEnabled(): Promise<boolean> {
+  const result = await apiRequest<{ enabled?: boolean }>("/auth/google/status");
+  return result.enabled === true;
+}
+
 /** Authenticate with the MedNet API's secure HTTP session. */
 export async function signIn(email: string, password: string): Promise<Session | null> {
   await apiRequest<void>("/auth/login", {

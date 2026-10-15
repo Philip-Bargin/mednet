@@ -13,6 +13,11 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.InternalAuthenticationServiceException;
+import org.springframework.security.oauth2.client.oidc.userinfo.OidcUserRequest;
+import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
+import org.springframework.security.oauth2.client.userinfo.OAuth2UserService;
+import org.springframework.security.oauth2.core.oidc.user.OidcUser;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
@@ -126,9 +131,13 @@ public class SecurityConfig {
             HttpSecurity http,
             @Value("${server.servlet.session.cookie.secure:true}") boolean secureCookies,
             @Value("${mednet.session.absolute-timeout:12h}") Duration absoluteSessionTimeout,
+            @Value("${GOOGLE_CLIENT_ID:}") String googleClientId,
+            @Value("${GOOGLE_CLIENT_SECRET:}") String googleClientSecret,
             AuthRateLimiter rateLimiter,
             ClientAddressResolver clientAddresses,
             SessionRegistry sessionRegistry,
+            ObjectProvider<ClientRegistrationRepository> clientRegistrations,
+            ObjectProvider<GoogleOidcUserService> googleUserServices,
             Clock clock,
             ObjectMapper objectMapper) throws Exception {
         CookieCsrfTokenRepository csrfTokenRepository = CookieCsrfTokenRepository.withHttpOnlyFalse();
@@ -167,12 +176,15 @@ public class SecurityConfig {
                                 "/api/v1/auth/verify",
                                 "/api/v1/auth/verify-code",
                                 "/api/v1/auth/resend-verification",
+                                "/api/v1/auth/google/status",
                                 "/api/v1/auth/forgot-password",
                                 "/api/v1/auth/reset-password/verify",
                                 "/api/v1/auth/reset-password")
                         .permitAll()
                         // The public provider directory, one provider's entry, specialty counts and open times.
                         .requestMatchers(HttpMethod.GET, "/api/v1/providers", "/api/v1/providers/*", "/api/v1/providers/*/availability")
+                        .permitAll()
+                        .requestMatchers("/oauth2/authorization/**", "/login/oauth2/code/**")
                         .permitAll()
                         .requestMatchers("/api/v1/admin/**", "/api/v1/auth/admin/**")
                         .hasAnyRole("ADMIN", "SUPER_ADMIN")
@@ -206,6 +218,21 @@ public class SecurityConfig {
                                 .expiredSessionStrategy(event -> writeError(
                                         objectMapper, event.getRequest(), event.getResponse(),
                                         HttpServletResponse.SC_UNAUTHORIZED, "UNAUTHORIZED", "Sign-in required"))));
+
+        if (!googleClientId.isBlank()
+                && !googleClientSecret.isBlank()
+                && clientRegistrations.getIfAvailable() != null) {
+            OAuth2UserService<OidcUserRequest, OidcUser> googleUserService =
+                    googleUserServices.getObject();
+            http.oauth2Login(oauth -> oauth
+                    .userInfoEndpoint(userInfo -> userInfo.oidcUserService(googleUserService))
+                    .successHandler((request, response, authentication) ->
+                            response.sendRedirect(roleDestination(authentication)))
+                    .failureHandler((request, response, exception) -> {
+                        log.warn("Google sign-in failed ({})", exception.getClass().getSimpleName());
+                        response.sendRedirect("/sign-in?googleError=1");
+                    }));
+        }
 
         http.addFilterBefore(
                 new SignInRateLimitFilter(rateLimiter, clientAddresses, rateLimited),
@@ -267,5 +294,21 @@ public class SecurityConfig {
                 "error", Map.of("code", code, "message", message, "details", List.of()),
                 "detail", message,
                 "meta", Map.of("requestId", requestId == null ? "" : requestId)));
+    }
+
+    private static String roleDestination(Authentication authentication) {
+        String role = authentication.getAuthorities().stream()
+                .map(authority -> authority.getAuthority())
+                .filter(authority -> authority.startsWith("ROLE_"))
+                .map(authority -> authority.substring("ROLE_".length()))
+                .findFirst()
+                .orElse("PATIENT");
+        return switch (role) {
+            case "ADMIN", "SUPER_ADMIN" -> "/admin";
+            case "PROVIDER" -> "/provider";
+            case "LABORATORY" -> "/laboratory";
+            case "HOME_CARE" -> "/home-care";
+            default -> "/patient";
+        };
     }
 }

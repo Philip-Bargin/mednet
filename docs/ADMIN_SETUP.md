@@ -13,6 +13,8 @@ For production, set these values in the MedNet environment in LPAD:
 | `MEDNET_ADMIN_EMAIL` | Initial administrator email; receives `SUPER_ADMIN` |
 | `MEDNET_ADMIN_PASSWORD` | Initial administrator password; store as a server-side secret |
 | `MEDNET_PUBLIC_URL` | Public MedNet origin used in verification and password-reset links |
+| `GOOGLE_CLIENT_ID` | Google OAuth web client ID |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth web client secret; store as a secret |
 | `SPRING_DATASOURCE_URL` | PostgreSQL JDBC URL, for example `jdbc:postgresql://<host>:5432/mednet` |
 | `SPRING_DATASOURCE_USERNAME` | PostgreSQL application user |
 | `SPRING_DATASOURCE_PASSWORD` | PostgreSQL password; store as a secret |
@@ -37,6 +39,12 @@ See [Security audit](SECURITY_AUDIT.md). Set `MEDNET_TRUSTED_PROXIES` to the rev
 The MedNet API generates its own single-use verification/recovery codes and secure fallback links, then sends them directly through EKDSend. Keep `EKDSEND_API_KEY` server-side in the MedNet API environment, never in the browser or Git.
 
 Registration and resend use privacy-preserving responses. The six-digit code is the primary verification method; the secure link is an alternative. Password recovery uses a code and a short-lived reset ticket. For delivery failures, inspect EKDSend's recipient/message status and verify that `FROM_EMAIL` is an approved sender. A queued message confirms provider acceptance, not final inbox delivery.
+
+The verification page includes a resend action that requests a fresh code and secure link through
+the MedNet API. Google OAuth is optional; set both Google client credentials and register
+`https://mednet.lpad.ekddigital.com/login/oauth2/code/google` in the Google Cloud OAuth client.
+Google can link only an existing account with the same verified email. See
+[Authentication Setup](AUTHENTICATION_SETUP.md) for the local callback and account-linking rules.
 
 All grouped services in an LPAD project receive the project's configured environment variables during build and runtime. Keep secrets in the LPAD project environment, never in source code or client bundles. Treat services in one project as sharing the same secret access; use separate LPAD projects if services need different secret privileges.
 

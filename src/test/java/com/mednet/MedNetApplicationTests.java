@@ -76,6 +76,9 @@ import static org.mockito.Mockito.doAnswer;
         "server.servlet.session.cookie.secure=false",
         "spring.datasource.url=jdbc:h2:mem:mednet;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
         "spring.datasource.username=sa",
+        "GOOGLE_CLIENT_ID=test-google-client-id",
+        "GOOGLE_CLIENT_SECRET=test-google-client-secret",
+        "GOOGLE_REDIRECT_URI=https://mednet.example.test/login/oauth2/code/google",
         "spring.datasource.password="
 })
 @AutoConfigureMockMvc
@@ -166,6 +169,19 @@ class MedNetApplicationTests {
                 HttpResponse.BodyHandlers.ofString());
         assertThat(response.statusCode()).isEqualTo(200);
         assertThat(response.body()).contains("\"status\":\"UP\"");
+    }
+
+    @Test
+    void googleOauthIsAvailableAndStartsTheAuthorizationRedirect() throws Exception {
+        mockMvc.perform(get("/api/v1/auth/google/status"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.enabled").value(true));
+
+        MvcResult result = mockMvc.perform(get("/oauth2/authorization/google")).andReturn();
+        assertThat(result.getResponse().getStatus()).isBetween(300, 399);
+        assertThat(result.getResponse().getRedirectedUrl())
+                .startsWith("https://accounts.google.com/o/oauth2/v2/auth")
+                .contains("redirect_uri=https://mednet.example.test/login/oauth2/code/google");
     }
 
     @Test

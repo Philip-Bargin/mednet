@@ -1,5 +1,6 @@
 package com.mednet.auth.api;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.http.HttpStatus;
@@ -13,9 +14,28 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/api/v1/auth")
 public class AdminAuthController {
 
+    private final String googleClientId;
+    private final String googleClientSecret;
+    private final String datasourceUrl;
+
+    public AdminAuthController(
+            @Value("${GOOGLE_CLIENT_ID:}") String googleClientId,
+            @Value("${GOOGLE_CLIENT_SECRET:}") String googleClientSecret,
+            @Value("${spring.datasource.url:}") String datasourceUrl) {
+        this.googleClientId = googleClientId;
+        this.googleClientSecret = googleClientSecret;
+        this.datasourceUrl = datasourceUrl;
+    }
+
     @GetMapping("/csrf")
     public CsrfResponse csrf(CsrfToken csrfToken) {
         return new CsrfResponse(csrfToken.getHeaderName(), csrfToken.getToken());
+    }
+
+    @GetMapping("/google/status")
+    public GoogleStatus googleStatus() {
+        return new GoogleStatus(
+                !googleClientId.isBlank() && !googleClientSecret.isBlank() && !datasourceUrl.isBlank());
     }
 
     @GetMapping("/admin/session")
@@ -43,6 +63,9 @@ public class AdminAuthController {
     }
 
     public record CsrfResponse(String headerName, String token) {
+    }
+
+    public record GoogleStatus(boolean enabled) {
     }
 
     public record AdminSession(String email, String role) {

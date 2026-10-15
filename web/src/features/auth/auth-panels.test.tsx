@@ -24,6 +24,9 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
   const url = String(input);
   calls.push({ url, init });
   const key = `${init?.method ?? "GET"} ${url.split("?")[0]}`;
+  if (key === "GET /api/v1/auth/google/status" && !routes.has(key)) {
+    return Response.json({ enabled: false });
+  }
   const queue = routes.get(key);
   if (key === "GET /api/v1/auth/csrf") return Response.json({ headerName: "X-XSRF-TOKEN", token: "t" });
   if (!queue?.length) throw new Error(`Unexpected request ${key}`);
@@ -58,6 +61,14 @@ describe("SignInPanel", () => {
     on("GET", "/api/v1/auth/session", { status: 200, body: { email: "a@b.lr", role: "SUPER_ADMIN" } });
     render(<SignInPanel />);
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/admin"));
+  });
+
+  it("shows Google sign-in only when OAuth is configured by the API", async () => {
+    on("GET", "/api/v1/auth/session", unauthenticated);
+    on("GET", "/api/v1/auth/google/status", { status: 200, body: { enabled: true } });
+    render(<SignInPanel />);
+    expect(await screen.findByRole("link", { name: "Continue with Google" }))
+      .toHaveAttribute("href", "/oauth2/authorization/google");
   });
 
   it("validates fields before attempting API authentication", async () => {
@@ -252,6 +263,28 @@ describe("VerifyEmailPanel", () => {
     expect(await screen.findByText("Your email address is confirmed. You can now continue to MedNet.")).toBeInTheDocument();
     const verifyCall = calls.find((call) => call.url === "/api/v1/auth/verify-code");
     expect(JSON.parse(String(verifyCall?.init?.body))).toEqual({ email: "p@b.lr", code: "123456" });
+  });
+
+  it("resends a fresh verification code and secure link from the code-entry page", async () => {
+    on("POST", "/api/v1/auth/resend-verification", {
+      status: 202,
+      body: {
+        message:
+          "If an account with this email needs verification, we will send a new six-digit code and secure verification link shortly.",
+      },
+    });
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...window.location, search: "?email=p%40b.lr", origin: "http://localhost:3000" },
+    });
+    render(<VerifyEmailPanel />);
+    await userEvent.click(await screen.findByRole("button", { name: "Resend code and secure link" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "new six-digit code and secure verification link",
+    );
+    const resendCall = calls.find((call) => call.url === "/api/v1/auth/resend-verification");
+    expect(JSON.parse(String(resendCall?.init?.body))).toEqual({ email: "p@b.lr" });
   });
 
   it("keeps the one-time verification link working", async () => {

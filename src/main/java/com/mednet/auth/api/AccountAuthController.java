@@ -319,7 +319,7 @@ public class AccountAuthController {
 
     private static MessageResponse resendVerificationResponse() {
         return new MessageResponse(
-                "If an account with this email needs verification, we will send a new six-digit code shortly.");
+                "If an account with this email needs verification, we will send a new six-digit code and secure verification link shortly.");
     }
 
     private static ResponseEntity<MessageResponse> verificationDeliveryFailure() {

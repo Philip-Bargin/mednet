@@ -23,6 +23,9 @@ public class PlatformAccountEntity {
     @Column(nullable = false, unique = true, length = 254)
     private String email;
 
+    @Column(name = "google_subject", unique = true, length = 255)
+    private String googleSubject;
+
     @Column(name = "display_name", length = 160)
     private String displayName;
 
@@ -101,6 +104,10 @@ public class PlatformAccountEntity {
 
     public String getEmail() {
         return email;
+    }
+
+    public String getGoogleSubject() {
+        return googleSubject;
     }
 
     public String getDisplayName() {
@@ -189,6 +196,10 @@ public class PlatformAccountEntity {
     public void setPasswordHash(String passwordHash) {
         this.passwordHash = passwordHash;
         clearPasswordResetToken();
+    }
+
+    public void linkGoogleSubject(String googleSubject) {
+        this.googleSubject = googleSubject;
     }
 
     public void setVerificationToken(String tokenHash, Instant expiresAt) {

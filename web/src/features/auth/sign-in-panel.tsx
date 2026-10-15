@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Alert } from "@/components/ui/alert";
-import { Button, ButtonLink } from "@/components/ui/button";
+import { Button, ButtonLink, buttonClasses } from "@/components/ui/button";
 import { TextInput } from "@/components/ui/inputs";
 import { PasswordField } from "@/components/ui/password-field";
 import { SegmentedControl } from "@/components/ui/segmented-control";
@@ -13,6 +13,7 @@ import { StateMessage } from "@/components/ui/state-message";
 import { ApiRequestError, getSession } from "@/lib/api";
 import {
   emailProblem,
+  googleAuthEnabled,
   passwordProblem,
   register,
   requestPasswordReset,
@@ -58,18 +59,38 @@ export function SignInPanel() {
   const [registrationDuplicate, setRegistrationDuplicate] = useState(false);
   const [offerResend, setOfferResend] = useState(false);
   const [recoverySent, setRecoverySent] = useState(false);
+  const [googleEnabled, setGoogleEnabled] = useState(false);
+  const [googleStatusError, setGoogleStatusError] = useState("");
   const emailRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let active = true;
-    getSession()
-      .then((session) => {
+    Promise.allSettled([getSession(), googleAuthEnabled()])
+      .then(([sessionResult, googleResult]) => {
         if (!active) return;
-        if (session) goTo(destinationAfterSignIn(session.role, window.location.search, window.location.origin));
-        else setSessionChecked(true);
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("googleError") === "1") {
+          setError("Google sign-in could not be completed. Try again or sign in with your email and password.");
+        }
+        if (sessionResult.status === "fulfilled" && sessionResult.value) {
+          goTo(destinationAfterSignIn(
+            sessionResult.value.role,
+            window.location.search,
+            window.location.origin,
+          ));
+          return;
+        }
+        if (googleResult.status === "fulfilled") {
+          setGoogleEnabled(googleResult.value);
+        } else {
+          setGoogleStatusError("Google sign-in availability could not be checked.");
+        }
+        setSessionChecked(true);
       })
-      .catch(() => active && setSessionChecked(true));
+      .catch(() => {
+        if (active) setSessionChecked(true);
+      });
     return () => {
       active = false;
     };
@@ -243,6 +264,9 @@ export function SignInPanel() {
           </div>
         ) : null}
         {message ? <Alert tone="success" live="polite" title={message} /> : null}
+        {googleStatusError && mode === "login" ? (
+          <Alert tone="critical" live="polite" title={googleStatusError} />
+        ) : null}
         {resendOffer}
         {recoverySent ? (
           <ButtonLink href={`/reset?email=${encodeURIComponent(email.trim())}`} variant="secondary" fullWidth>
@@ -279,6 +303,18 @@ export function SignInPanel() {
           </Link>
         ) : null}
       </div>
+
+      {mode === "login" && googleEnabled ? (
+        <div className="border-t border-border pt-5">
+          <p className="mb-3 text-caption font-semibold text-text-secondary">Or continue with</p>
+          <a
+            className={buttonClasses({ variant: "secondary", fullWidth: true })}
+            href="/oauth2/authorization/google"
+          >
+            Continue with Google
+          </a>
+        </div>
+      ) : null}
 
       <div className="border-t border-border pt-5">
         <p className="mt-3 text-caption text-text-muted">

@@ -2,8 +2,9 @@
 
 MedNet uses its Spring Boot API for account registration, password sign-in, session management,
 email verification, and password recovery. The API stores account credentials and issues
-HTTP-only session cookies protected by CSRF tokens. External identity-provider sessions are not
-part of the authentication flow.
+HTTP-only session cookies protected by CSRF tokens. Google OAuth is also supported when its client
+credentials are configured. Google identities can link only to an existing MedNet account with the
+same Google-verified email; Google sign-in does not silently create accounts.
 
 ## Runtime configuration
 
@@ -14,6 +15,9 @@ Set these values in the MedNet API environment. Never put secrets in Git or fron
 | `MEDNET_ADMIN_EMAIL` | Initial administrator account email |
 | `MEDNET_ADMIN_PASSWORD` | Initial administrator password; keep server-side |
 | `MEDNET_PUBLIC_URL` | Public MedNet origin used to build verification and reset links |
+| `GOOGLE_CLIENT_ID` | Google OAuth web client ID |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth web client secret; keep server-side |
+| `GOOGLE_REDIRECT_URI` | Optional explicit callback URI; otherwise derived from the public request URL |
 | `EKDSEND_API_URL` | EKDSend API base URL; defaults to `https://es.ekddigital.com/api/v1` |
 | `EKDSEND_API_KEY` | Server-only key used to send authentication emails |
 | `FROM_EMAIL` | Approved sender address; defaults to `support@ekddigital.com` |
@@ -23,6 +27,23 @@ Set these values in the MedNet API environment. Never put secrets in Git or fron
 
 The root `.env.example` contains placeholders suitable for local development. Production values
 belong in the API service's protected deployment environment.
+
+## Google OAuth
+
+Create a Google OAuth web client and register these authorized redirect URIs:
+
+- Production: `https://mednet.lpad.ekddigital.com/login/oauth2/code/google`
+- Local development: `http://localhost:3000/login/oauth2/code/google`
+
+Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in the API environment. The Google button is
+shown when the API has both credentials and a datasource configured. The API retains the Google
+subject on the matching MedNet account, requires Google's `email_verified` claim, rejects
+suspended accounts and identity/email mismatches, and uses MedNet's account role for authorization.
+If an existing account has not verified its email, a verified Google sign-in confirms it; an
+unverified local password is cleared so its owner can set a password through recovery.
+
+If the Google-verified email matches `MEDNET_ADMIN_EMAIL`, the configured administrator receives
+`SUPER_ADMIN`. Protect that Google account with strong MFA and secure the OAuth client secret.
 
 ## Account and email flow
 
@@ -46,7 +67,6 @@ session cookie. It does not store session credentials in browser storage. State-
 obtain a CSRF token from `GET /api/v1/auth/csrf` and send it with the header named in the response.
 Account roles and statuses come from the MedNet database and are never accepted from browser input.
 
-Existing users must have a corresponding MedNet account and a usable local password to sign in.
-Before deploying a change from another identity provider, verify that every required account has
-been provisioned in MedNet and has a password/recovery path; this code change does not migrate
-external identities or passwords.
+Email/password sign-in requires a corresponding MedNet account and a local password. Google sign-in
+can be used to link an existing account with the same verified Google email. Existing external
+identity data is not migrated automatically.

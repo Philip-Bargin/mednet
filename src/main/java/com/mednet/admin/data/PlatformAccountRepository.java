@@ -16,6 +16,8 @@ public interface PlatformAccountRepository extends JpaRepository<PlatformAccount
 
     Optional<PlatformAccountEntity> findFirstByEmailIgnoreCase(String email);
 
+    Optional<PlatformAccountEntity> findFirstByGoogleSubject(String googleSubject);
+
     Optional<PlatformAccountEntity> findFirstByVerificationTokenHash(String tokenHash);
 
     Optional<PlatformAccountEntity> findFirstByPasswordResetTokenHash(String tokenHash);

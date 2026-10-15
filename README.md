@@ -42,6 +42,8 @@ Open `http://localhost:3000` for the public site or `http://localhost:3000/admin
 
 Do not reuse the example local credentials in production. Configure production secrets in LPAD as described in [Admin Setup](docs/ADMIN_SETUP.md).
 
+Google sign-in is optional and appears when `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are configured for the API. Register the callback URL listed in [Authentication Setup](docs/AUTHENTICATION_SETUP.md).
+
 ## Verify
 
 Run the backend integration tests from the repository root. They use an in-memory H2 database in PostgreSQL mode and do not require a local PostgreSQL server:

@@ -9,7 +9,7 @@ class AdminAuthControllerTests {
 
     @Test
     void sessionPrefersMedNetRoleOverGenericSpringUserAuthority() {
-        AdminAuthController controller = new AdminAuthController();
+        AdminAuthController controller = new AdminAuthController("", "", "");
         TestingAuthenticationToken authentication = new TestingAuthenticationToken(
                 "patient@example.test",
                 null,

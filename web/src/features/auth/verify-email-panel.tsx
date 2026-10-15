@@ -5,7 +5,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { TextInput } from "@/components/ui/inputs";
 import { StateMessage } from "@/components/ui/state-message";
-import { emailProblem, verifyEmailCode, verifyEmailLink } from "./auth-api";
+import { emailProblem, resendVerification, verifyEmailCode, verifyEmailLink } from "./auth-api";
 
 type State = { kind: "loading" } | { kind: "form" } | { kind: "success" };
 
@@ -15,7 +15,9 @@ export function VerifyEmailPanel() {
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
+  const [resendMessage, setResendMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [resending, setResending] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -60,6 +62,25 @@ export function VerifyEmailPanel() {
     }
   }
 
+  async function resendCode() {
+    const emailError = emailProblem(email.trim());
+    if (emailError) return setError(emailError);
+    setResending(true);
+    setError("");
+    setResendMessage("");
+    try {
+      const response = await resendVerification(email.trim());
+      setResendMessage(
+        response.message ??
+          "If this email needs verification, a new six-digit code and secure link will arrive shortly.",
+      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The verification email could not be sent. Try again shortly.");
+    } finally {
+      setResending(false);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-5">
       <h2 className="text-title text-ink">Email verification</h2>
@@ -101,6 +122,21 @@ export function VerifyEmailPanel() {
             />
             <Button type="submit" fullWidth loading={busy}>Verify email</Button>
           </form>
+          {resendMessage ? (
+            <Alert tone="success" live="polite" title={resendMessage}>
+              Check your inbox and spam folder. If you still do not receive it, verify the email address above.
+            </Alert>
+          ) : null}
+          <Button
+            type="button"
+            variant="secondary"
+            fullWidth
+            loading={resending}
+            disabled={busy || emailProblem(email.trim()) !== null}
+            onClick={() => void resendCode()}
+          >
+            Resend code and secure link
+          </Button>
         </>
       )}
       {state.kind === "success" ? (
