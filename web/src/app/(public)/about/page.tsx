@@ -18,7 +18,7 @@ export const metadata: Metadata = {
 const patientSteps = [
   {
     title: "Create a patient account",
-    text: "Sign up with your email and verify it, or continue with Google where it is enabled. Then complete your patient profile.",
+    text: "Create an account with your email, verify it, and complete your patient profile.",
   },
   {
     title: "Find a doctor and request a time",

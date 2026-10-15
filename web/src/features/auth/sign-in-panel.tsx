@@ -2,6 +2,7 @@
 
 import { ArrowRight } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Alert } from "@/components/ui/alert";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -17,7 +18,6 @@ import {
   requestPasswordReset,
   resendVerification,
   signIn,
-  signInWithGoogle,
 } from "./auth-api";
 import { destinationAfterSignIn } from "./destination";
 
@@ -43,10 +43,11 @@ function goTo(destination: string) {
 }
 
 /**
- * Supabase sign-in, registration, verification resend and password-recovery request.
+ * MedNet sign-in, registration, verification resend and password-recovery request.
  * New accounts start as patients; provider access needs approval.
  */
-export function SignInPanel({ googleError }: { googleError: boolean }) {
+export function SignInPanel() {
+  const router = useRouter();
   const [sessionChecked, setSessionChecked] = useState(false);
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
@@ -54,8 +55,6 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const [verificationEmailSent, setVerificationEmailSent] = useState(false);
-  const [verificationCodeType, setVerificationCodeType] = useState<"email" | "magiclink">("email");
   const [registrationDuplicate, setRegistrationDuplicate] = useState(false);
   const [offerResend, setOfferResend] = useState(false);
   const [recoverySent, setRecoverySent] = useState(false);
@@ -80,8 +79,6 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
     setMode(next);
     setError("");
     setMessage("");
-    setVerificationEmailSent(false);
-    setVerificationCodeType("email");
     setRegistrationDuplicate(false);
     setFieldErrors({});
     setOfferResend(false);
@@ -116,16 +113,12 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
       }
       if (mode === "register") {
         await register(trimmed, password);
-        switchMode("login");
-        setMessage("Thanks for signing up.");
-        setVerificationEmailSent(true);
-        setOfferResend(true);
+        router.push(`/verify?email=${encodeURIComponent(trimmed)}`);
+        return;
       } else if (mode === "resend") {
-        const result = await resendVerification(trimmed);
-        switchMode("login");
-        setMessage(result.message ?? "If an account with this email needs verification, we will send a new verification link shortly.");
-        setVerificationEmailSent(true);
-        setVerificationCodeType("magiclink");
+        await resendVerification(trimmed);
+        router.push(`/verify?email=${encodeURIComponent(trimmed)}`);
+        return;
       } else {
         const result = await requestPasswordReset(trimmed);
         setMessage(result.message ?? "If the account exists, password recovery instructions have been sent.");
@@ -139,35 +132,12 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
         if (cause.status === 503) setError("Sign-in is temporarily unavailable. Please try again shortly.");
         else {
           if (cause.status === 401) setOfferResend(true);
-          if (cause.status === 409) {
-            setError("This account has already moved to Supabase. Use password recovery to continue.");
-          } else {
-            setError("Sign-in failed. Verify your email and password.");
-          }
+          setError("Sign-in failed. Verify your email and password.");
         }
-      } else if (
-        mode === "login" &&
-        cause instanceof Error &&
-        "code" in cause &&
-        cause.code === "email_not_confirmed"
-      ) {
-        setOfferResend(true);
-        setError("Verify your email before signing in.");
       } else {
         setError(cause instanceof Error ? cause.message : "Request failed. Try again.");
       }
     } finally {
-      setBusy(false);
-    }
-  }
-
-  async function continueWithGoogle() {
-    setBusy(true);
-    setError("");
-    try {
-      await signInWithGoogle();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Google sign-in could not be started.");
       setBusy(false);
     }
   }
@@ -218,12 +188,6 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
           <p className="mt-1 text-data text-text-secondary">We’ll email a six-digit recovery code to this address.</p>
         ) : null}
       </div>
-
-      {googleError ? (
-        <Alert tone="critical" live="assertive" title="Google sign-in could not be completed">
-          Try again or use your email and password.
-        </Alert>
-      ) : null}
 
       <form noValidate onSubmit={submit} className="flex flex-col gap-5" aria-label={headings[mode]}>
         <TextInput
@@ -278,21 +242,7 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
             </Link>
           </div>
         ) : null}
-        {message ? (
-          <Alert tone="success" live="polite" title={message}>
-            {verificationEmailSent
-              ? "Enter the six-digit code sent to your email. If the code gives you trouble, use the secure verification link in that same email."
-              : undefined}
-          </Alert>
-        ) : null}
-        {verificationEmailSent ? (
-          <Link
-            href={`/verify?email=${encodeURIComponent(email.trim())}${verificationCodeType === "magiclink" ? "&type=magiclink" : ""}`}
-            className="-mt-3 min-h-10 content-center self-start rounded-sm text-data font-semibold text-green-800 hover:underline"
-          >
-            Enter six-digit verification code
-          </Link>
-        ) : null}
+        {message ? <Alert tone="success" live="polite" title={message} /> : null}
         {resendOffer}
         {recoverySent ? (
           <ButtonLink href={`/reset?email=${encodeURIComponent(email.trim())}`} variant="secondary" fullWidth>
@@ -331,12 +281,8 @@ export function SignInPanel({ googleError }: { googleError: boolean }) {
       </div>
 
       <div className="border-t border-border pt-5">
-        <p className="mb-3 text-caption font-semibold text-text-secondary">Other sign-in options</p>
-        <Button type="button" variant="secondary" fullWidth loading={busy} onClick={() => void continueWithGoogle()}>
-          Continue with Google
-        </Button>
         <p className="mt-3 text-caption text-text-muted">
-          Sign-in is securely handled by Supabase. MedNet keeps access roles and protected data on its backend.
+          MedNet secures your account and keeps access roles and protected data on its backend.
         </p>
       </div>
     </div>

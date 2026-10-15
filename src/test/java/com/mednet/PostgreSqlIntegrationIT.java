@@ -19,7 +19,6 @@ import com.mednet.admin.data.PlatformAccountEntity;
 import com.mednet.admin.data.PlatformAccountRepository;
 
 @SpringBootTest(properties = {
-        "mednet.google.enabled=false",
         "server.servlet.session.cookie.secure=false"
 })
 class PostgreSqlIntegrationIT {

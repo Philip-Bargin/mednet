@@ -302,8 +302,7 @@ export function isWorkspaceId(value: string): value is WorkspaceId {
 }
 
 /**
- * Where a signed-in user lands. Matches the backend's Google sign-in redirect and the
- * existing pages exactly; new workspaces join this map only when their pages ship.
+ * Where a signed-in user lands based on the role returned by the MedNet API.
  */
 export function homePathForRole(role: string): string {
   switch (role) {

@@ -6,6 +6,9 @@ were fixed with regression tests; no features, endpoints or permissions were add
 changed. No PostgreSQL connection was made (the exposed Supabase password is still unrotated); real-API tests
 used a throwaway H2 database. This file contains no credentials or patient data; all test data is synthetic.
 
+This is a historical report. The authentication implementation changed afterward to MedNet-managed
+sessions and EKDSend email; OAuth findings and routes below describe the earlier version.
+
 Severity: **Critical** security exposure or major data-integrity risk · **High** essential workflow broken ·
 **Medium** significant usability or functionality issue · **Low** minor visual or presentation inconsistency.
 

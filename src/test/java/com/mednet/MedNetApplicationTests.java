@@ -73,7 +73,6 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
-        "mednet.google.enabled=true",
         "server.servlet.session.cookie.secure=false",
         "spring.datasource.url=jdbc:h2:mem:mednet;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
         "spring.datasource.username=sa",
@@ -84,17 +83,11 @@ class MedNetApplicationTests {
 
     private static final String ADMIN_EMAIL = "admin@mednet.test";
     private static final String ADMIN_PASSWORD = UUID.randomUUID().toString();
-    private static final String GOOGLE_CLIENT_ID = "test-client-" + UUID.randomUUID();
-    private static final String GOOGLE_CLIENT_SECRET = UUID.randomUUID().toString();
-    private static final String GOOGLE_REDIRECT_URI = "http://localhost:8080/api/v1/auth/oauth2/callback/google";
 
     @DynamicPropertySource
     static void registerAdministratorProperties(DynamicPropertyRegistry registry) {
         registry.add("mednet.admin.email", () -> ADMIN_EMAIL);
         registry.add("mednet.admin.password", () -> ADMIN_PASSWORD);
-        registry.add("GOOGLE_CLIENT_ID", () -> GOOGLE_CLIENT_ID);
-        registry.add("GOOGLE_CLIENT_SECRET", () -> GOOGLE_CLIENT_SECRET);
-        registry.add("GOOGLE_REDIRECT_URI", () -> GOOGLE_REDIRECT_URI);
     }
 
     @Autowired
@@ -217,7 +210,7 @@ class MedNetApplicationTests {
 
     @Test
     void requestIdsAreReturnedAndIncludedInValidationErrors() throws Exception {
-        mockMvc.perform(get("/api/v1/auth/google/status")
+        mockMvc.perform(get("/api/v1/auth/csrf")
                 .header("X-Request-Id", "mednet-test-42"))
                 .andExpect(status().isOk())
                 .andExpect(header().string("X-Request-Id", "mednet-test-42"));
@@ -238,17 +231,10 @@ class MedNetApplicationTests {
 
     @Test
     void requestIdsAreGeneratedWhenClientValueIsInvalid() throws Exception {
-        mockMvc.perform(get("/api/v1/auth/google/status")
+        mockMvc.perform(get("/api/v1/auth/csrf")
                 .header("X-Request-Id", "invalid request id"))
                 .andExpect(status().isOk())
                 .andExpect(header().exists("X-Request-Id"));
-    }
-
-    @Test
-    void verificationModeIsAvailableBeforeAuthentication() throws Exception {
-        mockMvc.perform(get("/api/v1/auth/verification-mode"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.mode").value("legacy"));
     }
 
     @Test
@@ -1793,24 +1779,6 @@ class MedNetApplicationTests {
                 .with(user(ADMIN_EMAIL).roles("ADMIN")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.url").value("/api-docs/"));
-    }
-
-    @Test
-    void googleSignInIsAvailableWhenConfigured() throws Exception {
-        mockMvc.perform(get("/api/v1/auth/google/status"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.enabled").value(true));
-    }
-
-    @Test
-    void googleAuthorizationStartsWithConfiguredRedirect() throws Exception {
-        MvcResult result = mockMvc.perform(get("/api/v1/auth/oauth2/authorization/google"))
-                .andExpect(status().is3xxRedirection())
-                .andReturn();
-
-        assertThat(result.getResponse().getRedirectedUrl())
-                .startsWith("https://accounts.google.com/o/oauth2/v2/auth?")
-                .contains("redirect_uri=" + GOOGLE_REDIRECT_URI);
     }
 
     @Test

@@ -1,26 +1,15 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { AuthApiError } from "@supabase/supabase-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AccountPanel } from "./account-panel";
 import { ResetPasswordPanel } from "./reset-password-panel";
 import { SignInPanel } from "./sign-in-panel";
 import { VerifyEmailPanel } from "./verify-email-panel";
 
-const supabaseAuth = vi.hoisted(() => ({
-  getSession: vi.fn(),
-  signInWithPassword: vi.fn(),
-  signUp: vi.fn(),
-  resend: vi.fn(),
-  resetPasswordForEmail: vi.fn(),
-  verifyOtp: vi.fn(),
-  updateUser: vi.fn(),
-  signOut: vi.fn(),
-  signInWithOAuth: vi.fn(),
-}));
+const routerPush = vi.hoisted(() => vi.fn());
 
-vi.mock("@/lib/supabase/client", () => ({
-  getSupabaseBrowserClient: () => ({ auth: supabaseAuth }),
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: routerPush }),
 }));
 
 type Route = { status: number; body?: unknown };
@@ -53,24 +42,13 @@ const unauthenticated = {
 beforeEach(() => {
   routes.clear();
   calls.length = 0;
+  routerPush.mockReset();
   vi.stubGlobal("fetch", fetchMock);
   replace.mockReset();
   Object.defineProperty(window, "location", {
     configurable: true,
     value: { ...window.location, replace, search: "", origin: "http://localhost:3000" },
   });
-  supabaseAuth.getSession.mockReset().mockResolvedValue({ data: { session: null }, error: null });
-  supabaseAuth.signInWithPassword.mockReset().mockResolvedValue({ data: { session: null }, error: null });
-  supabaseAuth.signUp.mockReset().mockResolvedValue({ data: { user: {}, session: null }, error: null });
-  supabaseAuth.resend.mockReset().mockResolvedValue({ data: {}, error: null });
-  supabaseAuth.resetPasswordForEmail.mockReset().mockResolvedValue({ data: {}, error: null });
-  supabaseAuth.verifyOtp.mockReset().mockResolvedValue({
-    data: { session: { access_token: "recovery-token" } },
-    error: null,
-  });
-  supabaseAuth.updateUser.mockReset().mockResolvedValue({ data: {}, error: null });
-  supabaseAuth.signOut.mockReset().mockResolvedValue({ error: null });
-  supabaseAuth.signInWithOAuth.mockReset().mockResolvedValue({ data: { url: "https://google.test" }, error: null });
 });
 
 afterEach(() => vi.unstubAllGlobals());
@@ -78,70 +56,43 @@ afterEach(() => vi.unstubAllGlobals());
 describe("SignInPanel", () => {
   it("redirects an existing session to the role home", async () => {
     on("GET", "/api/v1/auth/session", { status: 200, body: { email: "a@b.lr", role: "SUPER_ADMIN" } });
-    render(<SignInPanel googleError={false} />);
+    render(<SignInPanel />);
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/admin"));
   });
 
-  it("validates fields before attempting Supabase authentication", async () => {
+  it("validates fields before attempting API authentication", async () => {
     on("GET", "/api/v1/auth/session", unauthenticated);
-    render(<SignInPanel googleError={false} />);
+    render(<SignInPanel />);
     await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
     const email = screen.getByRole("textbox", { name: /Email address/ });
     expect(email).toHaveAttribute("aria-invalid", "true");
     expect(email).toHaveFocus();
-    expect(supabaseAuth.signInWithPassword).not.toHaveBeenCalled();
+    expect(calls.some((call) => call.url === "/api/v1/auth/login")).toBe(false);
   });
 
-  it("signs in with Supabase and redirects using the backend role", async () => {
+  it("signs in through MedNet and redirects using the backend role", async () => {
     on("GET", "/api/v1/auth/session", unauthenticated, { status: 200, body: { email: "p@b.lr", role: "PATIENT" } });
-    render(<SignInPanel googleError={false} />);
+    on("POST", "/api/v1/auth/login", { status: 204 });
+    render(<SignInPanel />);
     await userEvent.type(await screen.findByRole("textbox", { name: /Email address/ }), "p@b.lr");
     await userEvent.type(screen.getByLabelText(/^Password/), "correct horse battery");
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/patient"));
-    expect(supabaseAuth.signInWithPassword).toHaveBeenCalledWith({
-      email: "p@b.lr",
-      password: "correct horse battery",
-    });
+    const loginCall = calls.find((call) => call.url === "/api/v1/auth/login");
+    expect(new URLSearchParams(String(loginCall?.init?.body))).toEqual(
+      new URLSearchParams({ email: "p@b.lr", password: "correct horse battery" }),
+    );
   });
 
-  it("migrates a valid legacy BCrypt login, then signs in with Supabase", async () => {
-    on("GET", "/api/v1/auth/session", unauthenticated, { status: 200, body: { email: "p@b.lr", role: "PATIENT" } });
-    on("POST", "/api/v1/auth/migrate-legacy", { status: 200, body: { message: "Migrated" } });
-    supabaseAuth.signInWithPassword
-      .mockResolvedValueOnce({
-        data: { session: null },
-        error: new AuthApiError("Invalid login credentials", 400, "invalid_credentials"),
-      })
-      .mockResolvedValueOnce({ data: { session: { access_token: "new-token" } }, error: null });
-
-    render(<SignInPanel googleError={false} />);
-    await userEvent.type(await screen.findByRole("textbox", { name: /Email address/ }), "p@b.lr");
-    await userEvent.type(screen.getByLabelText(/^Password/), "correct horse battery");
-    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
-
-    await waitFor(() => expect(replace).toHaveBeenCalledWith("/patient"));
-    const migrationCall = calls.find((call) => call.url === "/api/v1/auth/migrate-legacy");
-    expect(JSON.parse(String(migrationCall?.init?.body))).toEqual({
-      email: "p@b.lr",
-      password: "correct horse battery",
-    });
-    expect(supabaseAuth.signInWithPassword).toHaveBeenCalledTimes(2);
-  });
-
-  it("reports a migration service outage without disguising it as bad credentials", async () => {
+  it("reports a MedNet login service outage without disguising it as bad credentials", async () => {
     on("GET", "/api/v1/auth/session", unauthenticated);
-    on("POST", "/api/v1/auth/migrate-legacy", {
+    on("POST", "/api/v1/auth/login", {
       status: 503,
-      body: { success: false, error: { code: "SERVICE_UNAVAILABLE", message: "Migration unavailable" } },
-    });
-    supabaseAuth.signInWithPassword.mockResolvedValue({
-      data: { session: null },
-      error: new AuthApiError("Invalid login credentials", 400, "invalid_credentials"),
+      body: { success: false, error: { code: "SERVICE_UNAVAILABLE", message: "Sign-in unavailable" } },
     });
 
-    render(<SignInPanel googleError={false} />);
+    render(<SignInPanel />);
     await userEvent.type(await screen.findByRole("textbox", { name: /Email address/ }), "p@b.lr");
     await userEvent.type(screen.getByLabelText(/^Password/), "any-password-123");
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
@@ -150,34 +101,42 @@ describe("SignInPanel", () => {
     );
   });
 
-  it("registers through the API so EKDSend delivers the Supabase verification email", async () => {
+  it("registers through the MedNet API and opens code entry automatically", async () => {
     on("GET", "/api/v1/auth/session", unauthenticated);
     on("POST", "/api/v1/auth/register", {
       status: 202,
       body: { message: "If a new account can be created for this email, we will send a verification link." },
     });
-    render(<SignInPanel googleError={false} />);
+    render(<SignInPanel />);
     await userEvent.click(await screen.findByText("Create account"));
     await userEvent.type(screen.getByRole("textbox", { name: /Email address/ }), "new@b.lr");
     await userEvent.type(screen.getByLabelText(/^Password/), "a-valid-password-123");
     await userEvent.click(screen.getByRole("button", { name: "Create account" }));
 
-    const registrationStatus = await screen.findByRole("status");
-    expect(registrationStatus).toHaveTextContent("Thanks for signing up.");
-    expect(registrationStatus).toHaveTextContent(
-      "Enter the six-digit code sent to your email.",
-    );
-    expect(screen.getByRole("link", { name: "Enter six-digit verification code" })).toHaveAttribute(
-      "href",
-      "/verify?email=new%40b.lr",
-    );
-    expect(screen.getByRole("button", { name: "Resend verification email" })).toBeInTheDocument();
+    await waitFor(() => expect(routerPush).toHaveBeenCalledWith("/verify?email=new%40b.lr"));
     const registerCall = calls.find((call) => call.url === "/api/v1/auth/register");
     expect(JSON.parse(String(registerCall?.init?.body))).toEqual({
       email: "new@b.lr",
       password: "a-valid-password-123",
     });
-    expect(supabaseAuth.signUp).not.toHaveBeenCalled();
+  });
+
+  it("opens the code form after resending verification", async () => {
+    on("GET", "/api/v1/auth/session", unauthenticated);
+    on("POST", "/api/v1/auth/login", unauthenticated);
+    on("POST", "/api/v1/auth/resend-verification", {
+      status: 202,
+      body: { message: "A six-digit code will be sent shortly." },
+    });
+
+    render(<SignInPanel />);
+    await userEvent.type(await screen.findByRole("textbox", { name: /Email address/ }), "new@b.lr");
+    await userEvent.type(screen.getByLabelText(/^Password/), "a-valid-password-123");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Resend verification email" }));
+    await userEvent.click(screen.getByRole("button", { name: "Resend verification email" }));
+
+    await waitFor(() => expect(routerPush).toHaveBeenCalledWith("/verify?email=new%40b.lr"));
   });
 
   it("shows an actionable message when an account email is already registered", async () => {
@@ -192,7 +151,7 @@ describe("SignInPanel", () => {
         },
       },
     });
-    render(<SignInPanel googleError={false} />);
+    render(<SignInPanel />);
     await userEvent.click(await screen.findByText("Create account"));
     await userEvent.type(screen.getByRole("textbox", { name: /Email address/ }), "existing@b.lr");
     await userEvent.type(screen.getByLabelText(/^Password/), "a-valid-password-123");
@@ -212,11 +171,11 @@ describe("SignInPanel", () => {
 
   it("prepares old accounts for recovery and links to the six-digit code step", async () => {
     on("GET", "/api/v1/auth/session", unauthenticated);
-    on("POST", "/api/v1/auth/prepare-reset", {
+    on("POST", "/api/v1/auth/forgot-password", {
       status: 202,
       body: { message: "If the account exists, password recovery instructions have been sent." },
     });
-    render(<SignInPanel googleError={false} />);
+    render(<SignInPanel />);
     await userEvent.click(await screen.findByRole("button", { name: "Forgot password?" }));
     await userEvent.type(screen.getByRole("textbox", { name: /Email address/ }), "p@b.lr");
     await userEvent.click(screen.getByRole("button", { name: "Send recovery instructions" }));
@@ -226,21 +185,21 @@ describe("SignInPanel", () => {
       "href",
       "/reset?email=p%40b.lr",
     );
-    expect(supabaseAuth.resetPasswordForEmail).not.toHaveBeenCalled();
-  });
-
-  it("keeps Google OAuth visible and reports a callback error", async () => {
-    on("GET", "/api/v1/auth/session", unauthenticated);
-    render(<SignInPanel googleError />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Google sign-in could not be completed");
-    expect(screen.getByRole("button", { name: "Continue with Google" })).toBeInTheDocument();
   });
 });
 
 describe("ResetPasswordPanel", () => {
-  it("verifies the recovery OTP and completes a Supabase password reset", async () => {
+  it("verifies the recovery code and resets the password through MedNet", async () => {
     window.history.replaceState = vi.fn();
-    render(<ResetPasswordPanel initialEmail="p@b.lr" initialRecovery={false} />);
+    on("POST", "/api/v1/auth/reset-password/verify", {
+      status: 200,
+      body: { token: "reset-ticket", message: "Code verified." },
+    });
+    on("POST", "/api/v1/auth/reset-password", {
+      status: 200,
+      body: { message: "Password updated. You can now sign in." },
+    });
+    render(<ResetPasswordPanel initialEmail="p@b.lr" />);
 
     expect(screen.getByRole("heading", { name: "Enter your recovery code" })).toBeInTheDocument();
     await userEvent.type(screen.getByRole("textbox", { name: /Six-digit code/ }), "12a3456");
@@ -251,21 +210,23 @@ describe("ResetPasswordPanel", () => {
     await userEvent.type(screen.getByLabelText(/^New password/), "a-brand-new-password");
     await userEvent.click(screen.getByRole("button", { name: "Update password" }));
     expect(await screen.findByText("Password updated. You can now sign in.")).toBeInTheDocument();
-    expect(supabaseAuth.verifyOtp).toHaveBeenCalledWith({
+    const resetCall = calls.find((call) => call.url === "/api/v1/auth/reset-password");
+    expect(JSON.parse(String(resetCall?.init?.body))).toEqual({
       email: "p@b.lr",
-      token: "123456",
-      type: "recovery",
+      token: "reset-ticket",
+      password: "a-brand-new-password",
     });
-    expect(supabaseAuth.updateUser).toHaveBeenCalledWith({ password: "a-brand-new-password" });
-    expect(supabaseAuth.signOut).toHaveBeenCalledWith({ scope: "local" });
   });
 
-  it("shows an invalid-code error returned by Supabase", async () => {
-    supabaseAuth.verifyOtp.mockResolvedValue({
-      data: { session: null },
-      error: new Error("The code is invalid or expired. Request a new code."),
+  it("shows an invalid-code error returned by MedNet", async () => {
+    on("POST", "/api/v1/auth/reset-password/verify", {
+      status: 400,
+      body: {
+        success: false,
+        error: { code: "BAD_REQUEST", message: "The code is invalid or expired. Request a new code." },
+      },
     });
-    render(<ResetPasswordPanel initialEmail="p@b.lr" initialRecovery={false} />);
+    render(<ResetPasswordPanel initialEmail="p@b.lr" />);
     await userEvent.type(screen.getByRole("textbox", { name: /Six-digit code/ }), "000000");
     await userEvent.click(screen.getByRole("button", { name: "Verify code" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("The code is invalid or expired. Request a new code.");
@@ -273,44 +234,7 @@ describe("ResetPasswordPanel", () => {
 });
 
 describe("VerifyEmailPanel", () => {
-  it("verifies a signup with the six-digit email code", async () => {
-    on("GET", "/api/v1/auth/verification-mode", { status: 200, body: { mode: "supabase" } });
-    Object.defineProperty(window, "location", {
-      configurable: true,
-      value: { ...window.location, search: "?email=p%40b.lr", origin: "http://localhost:3000" },
-    });
-    render(<VerifyEmailPanel />);
-    await userEvent.type(await screen.findByRole("textbox", { name: /Six-digit verification code/ }), "123456");
-    await userEvent.click(screen.getByRole("button", { name: "Verify email" }));
-
-    expect(await screen.findByText("Your email address is confirmed. You can now continue to MedNet.")).toBeInTheDocument();
-    expect(supabaseAuth.verifyOtp).toHaveBeenCalledWith({
-      email: "p@b.lr",
-      token: "123456",
-      type: "email",
-    });
-  });
-
-  it("uses the magic-link verification type for codes resent to an unverified account", async () => {
-    on("GET", "/api/v1/auth/verification-mode", { status: 200, body: { mode: "supabase" } });
-    Object.defineProperty(window, "location", {
-      configurable: true,
-      value: { ...window.location, search: "?email=p%40b.lr&type=magiclink", origin: "http://localhost:3000" },
-    });
-    render(<VerifyEmailPanel />);
-    await userEvent.type(await screen.findByRole("textbox", { name: /Six-digit verification code/ }), "654321");
-    await userEvent.click(screen.getByRole("button", { name: "Verify email" }));
-
-    expect(await screen.findByText("Your email address is confirmed. You can now continue to MedNet.")).toBeInTheDocument();
-    expect(supabaseAuth.verifyOtp).toHaveBeenCalledWith({
-      email: "p@b.lr",
-      token: "654321",
-      type: "magiclink",
-    });
-  });
-
-  it("verifies a legacy account code through the MedNet API", async () => {
-    on("GET", "/api/v1/auth/verification-mode", { status: 200, body: { mode: "legacy" } });
+  it("shows and focuses the six-digit code field immediately, then verifies through MedNet", async () => {
     on("POST", "/api/v1/auth/verify-code", {
       status: 200,
       body: { message: "Email verified. You can now sign in." },
@@ -320,17 +244,17 @@ describe("VerifyEmailPanel", () => {
       value: { ...window.location, search: "?email=p%40b.lr", origin: "http://localhost:3000" },
     });
     render(<VerifyEmailPanel />);
-    await userEvent.type(await screen.findByRole("textbox", { name: /Six-digit verification code/ }), "012345");
+    const codeInput = await screen.findByRole("textbox", { name: /Six-digit verification code/ });
+    expect(codeInput).toHaveFocus();
+    await userEvent.type(codeInput, "123456");
     await userEvent.click(screen.getByRole("button", { name: "Verify email" }));
 
     expect(await screen.findByText("Your email address is confirmed. You can now continue to MedNet.")).toBeInTheDocument();
-    expect(supabaseAuth.verifyOtp).not.toHaveBeenCalled();
     const verifyCall = calls.find((call) => call.url === "/api/v1/auth/verify-code");
-    expect(JSON.parse(String(verifyCall?.init?.body))).toEqual({ email: "p@b.lr", code: "012345" });
+    expect(JSON.parse(String(verifyCall?.init?.body))).toEqual({ email: "p@b.lr", code: "123456" });
   });
 
-  it("keeps the one-time verification link working for legacy accounts", async () => {
-    on("GET", "/api/v1/auth/verification-mode", { status: 200, body: { mode: "legacy" } });
+  it("keeps the one-time verification link working", async () => {
     on("GET", "/api/v1/auth/verify", {
       status: 200,
       body: { message: "Email verified. You can now sign in." },
@@ -347,15 +271,6 @@ describe("VerifyEmailPanel", () => {
 
     expect(await screen.findByText("Your email address is confirmed. You can now continue to MedNet.")).toBeInTheDocument();
     expect(calls.some((call) => call.url.startsWith("/api/v1/auth/verify?email=p%40b.lr"))).toBe(true);
-  });
-
-  it("shows success after the callback has verified the email", async () => {
-    Object.defineProperty(window, "location", {
-      configurable: true,
-      value: { ...window.location, search: "?verified=1", origin: "http://localhost:3000" },
-    });
-    render(<VerifyEmailPanel />);
-    expect(await screen.findByText("Your email address is confirmed. You can now continue to MedNet.")).toBeInTheDocument();
   });
 });
 
@@ -388,20 +303,21 @@ describe("AccountPanel", () => {
     expect(screen.queryByText("care@b.lr")).not.toBeInTheDocument();
   });
 
-  it("shows the session email and signs out through Supabase", async () => {
+  it("shows the session email and signs out through MedNet", async () => {
     on("GET", "/api/v1/auth/session", { status: 200, body: { email: "patient@b.lr", role: "PATIENT" } });
+    on("POST", "/api/v1/auth/logout", { status: 204 });
     render(<AccountPanel />);
     expect(await screen.findByText("patient@b.lr")).toBeInTheDocument();
     expect(screen.getByText("Patient")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
     expect(await screen.findByRole("link", { name: "Go to sign in" })).toHaveAttribute("href", "/sign-in");
-    expect(supabaseAuth.signOut).toHaveBeenCalledWith({ scope: "local" });
+    expect(calls.some((call) => call.url === "/api/v1/auth/logout")).toBe(true);
   });
 
   it("keeps the session and explains a failed sign-out", async () => {
     on("GET", "/api/v1/auth/session", { status: 200, body: { email: "p@b.lr", role: "PATIENT" } });
-    supabaseAuth.signOut.mockRejectedValue(new Error("Sign-out unavailable"));
+    on("POST", "/api/v1/auth/logout", { status: 500 });
     render(<AccountPanel />);
     await userEvent.click(await screen.findByRole("button", { name: "Sign out" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Sign-out failed. Close this browser session and try again.");

@@ -1,41 +1,18 @@
-import { AuthApiError } from "@supabase/supabase-js";
 import { apiRequest } from "@/lib/api/client";
 import { getSession, type Session } from "@/lib/api/session";
-import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type MessageResponse = { message?: string };
-export type EmailVerificationMode = "legacy" | "supabase";
 
-export async function getEmailVerificationMode(): Promise<EmailVerificationMode> {
-  const response = await apiRequest<{ mode: EmailVerificationMode }>("/auth/verification-mode");
-  return response.mode;
-}
-
-function callbackUrl(next: string): string {
-  const url = new URL("/auth/callback", window.location.origin);
-  url.searchParams.set("next", next);
-  return url.toString();
-}
-
-/** Authenticate through Supabase, migrating a valid legacy BCrypt login only when necessary. */
+/** Authenticate with the MedNet API's secure HTTP session. */
 export async function signIn(email: string, password: string): Promise<Session | null> {
-  const supabase = getSupabaseBrowserClient();
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) {
-    if (!(error instanceof AuthApiError) || error.code !== "invalid_credentials") {
-      throw error;
-    }
-    await apiRequest<MessageResponse>("/auth/migrate-legacy", {
-      method: "POST",
-      body: { email, password },
-    });
-    const migratedLogin = await supabase.auth.signInWithPassword({ email, password });
-    if (migratedLogin.error) throw migratedLogin.error;
-  }
+  await apiRequest<void>("/auth/login", {
+    method: "POST",
+    form: { email, password },
+  });
   return getSession();
 }
 
-/** The active MedNet auth mode issues verification credentials and delivers them through EKDSend. */
+/** Register a MedNet account and send its verification code through EKDSend. */
 export async function register(email: string, password: string): Promise<MessageResponse> {
   return apiRequest<MessageResponse>("/auth/register", {
     method: "POST",
@@ -51,67 +28,39 @@ export async function resendVerification(email: string): Promise<MessageResponse
 }
 
 export async function requestPasswordReset(email: string): Promise<MessageResponse> {
-  return apiRequest<MessageResponse>("/auth/prepare-reset", {
+  return apiRequest<MessageResponse>("/auth/forgot-password", {
     method: "POST",
     body: { email },
   });
 }
 
-export async function verifyResetCode(email: string, code: string): Promise<void> {
-  const { data, error } = await getSupabaseBrowserClient().auth.verifyOtp({
-    email,
-    token: code,
-    type: "recovery",
+export async function verifyResetCode(email: string, code: string): Promise<string> {
+  const result = await apiRequest<{ token?: string }>("/auth/reset-password/verify", {
+    method: "POST",
+    body: { email, code },
   });
-  if (error) throw error;
-  if (!data.session) throw new Error("Could not verify that code.");
+  if (!result.token) throw new Error("Could not verify that code.");
+  return result.token;
 }
 
-export async function verifyEmailCode(
-  email: string,
-  code: string,
-  type: "email" | "magiclink",
-  mode: EmailVerificationMode,
-): Promise<void> {
-  if (mode === "legacy") {
-    await apiRequest<MessageResponse>("/auth/verify-code", {
-      method: "POST",
-      body: { email, code },
-    });
-    return;
-  }
-  const { error } = await getSupabaseBrowserClient().auth.verifyOtp({
-    email,
-    token: code,
-    type,
+export async function verifyEmailCode(email: string, code: string): Promise<void> {
+  await apiRequest<MessageResponse>("/auth/verify-code", {
+    method: "POST",
+    body: { email, code },
   });
-  if (error) throw error;
 }
 
-export async function verifyLegacyEmailLink(email: string, token: string): Promise<void> {
+export async function verifyEmailLink(email: string, token: string): Promise<void> {
   await apiRequest<MessageResponse>("/auth/verify", {
     query: { email, token },
   });
 }
 
-export async function resetPassword(password: string): Promise<MessageResponse> {
-  const supabase = getSupabaseBrowserClient();
-  const { error } = await supabase.auth.updateUser({ password });
-  if (error) throw error;
-  const { error: signOutError } = await supabase.auth.signOut({ scope: "local" });
-  if (signOutError) throw signOutError;
-  return { message: "Password updated. You can now sign in." };
-}
-
-export async function signInWithGoogle(): Promise<void> {
-  const { error } = await getSupabaseBrowserClient().auth.signInWithOAuth({
-    provider: "google",
-    options: {
-      redirectTo: callbackUrl("/sign-in"),
-      queryParams: { prompt: "select_account" },
-    },
+export async function resetPassword(email: string, token: string, password: string): Promise<MessageResponse> {
+  return apiRequest<MessageResponse>("/auth/reset-password", {
+    method: "POST",
+    body: { email, token, password },
   });
-  if (error) throw error;
 }
 
 export const PASSWORD_MIN_LENGTH = 12;

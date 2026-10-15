@@ -73,7 +73,7 @@ endpoints for `HOME_CARE` accounts at `/home-care`: `GET /partner/service-reques
 identity), `PATCH /partner/service-requests/{id}/schedule` `{scheduledAt}` (once, future, OPEN and
 unscheduled; `409` otherwise, `400` for a past time) and `PATCH /partner/service-requests/{id}/status`
 `{status: IN_PROGRESS | RESOLVED}` (OPEN with a visit time → IN_PROGRESS → RESOLVED; `409` otherwise,
-`404` for a request not assigned to the caller). Google sign-in now lands `HOME_CARE` on `/home-care`
+`404` for a request not assigned to the caller). Sign-in now lands `HOME_CARE` on `/home-care`
 (was `/account`), and `/account` forwards home-care staff there.
 Phase 5B closure: authentication and email endpoints can answer `429` with `Retry-After` (seconds) and
 error code `RATE_LIMITED`; show the message and let the user retry later. A session can now end at any
@@ -93,8 +93,9 @@ the returned token using the returned header name.
 The generated OpenAPI reference is the source of truth for exact paths, request and response
 schemas, status codes, and parameters. The current guarded MVP includes:
 
-- Account registration, sign-in, session, email verification, password recovery, and Google sign-in status.
-  After a successful Google sign-in the API redirects by role: `ADMIN`/`SUPER_ADMIN` → `/admin`, `PATIENT` → `/patient`, `PROVIDER` (approved application) → `/provider`, `LABORATORY` → `/laboratory`, any other role → `/account`.
+- Account registration, sign-in, session, email verification, and password recovery. The API redirects
+  after sign-in by role: `ADMIN`/`SUPER_ADMIN` → `/admin`, `PATIENT` → `/patient`,
+  `PROVIDER` (approved application) → `/provider`, `LABORATORY` → `/laboratory`, any other role → `/account`.
 - Laboratory staff read back their own submitted results with `GET /api/v1/partner/lab-results` (`LABORATORY` only;
   results they authored on requests still assigned to them, newest first, latest 100). Fields: `id`, `requestId`,
   `summary`, `status` (`PENDING_REVIEW`, `RETURNED`, `RELEASED`), `createdAt`, `reviewedAt`. No patient or reviewer

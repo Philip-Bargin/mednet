@@ -14,17 +14,9 @@ spring:
     connect-retries-interval: 2s
 
 mednet:
-  supabase:
-    auth-enabled: ${SUPABASE_AUTH_ENABLED:false}
-    url: ${SUPABASE_URL:${SUPERBASE_PROJECT_URL:}}
-    issuer-uri: ${SUPABASE_ISSUER_URI:}
-    jwk-set-uri: ${SUPABASE_JWK_SET_URI:}
-    secret-key: ${SUPABASE_SECRET_KEY:}
   admin:
     email: ${MEDNET_ADMIN_EMAIL:}
     password: ${MEDNET_ADMIN_PASSWORD:}
-  google:
-    enabled: ${GOOGLE_OAUTH_ENABLED:false}
   session:
     # Signed-in sessions end this long after sign-in even when active (0 disables).
     absolute-timeout: ${SESSION_ABSOLUTE_TIMEOUT:12h}

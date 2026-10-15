@@ -21,7 +21,7 @@ describe("safeDestination", () => {
 });
 
 describe("destinationAfterSignIn", () => {
-  it("uses the role home when there is no redirect (matches the backend Google redirect)", () => {
+  it("uses the role home when there is no redirect", () => {
     expect(destinationAfterSignIn("ADMIN", "", origin)).toBe("/admin");
     expect(destinationAfterSignIn("SUPER_ADMIN", "", origin)).toBe("/admin");
     expect(destinationAfterSignIn("PATIENT", "", origin)).toBe("/patient");

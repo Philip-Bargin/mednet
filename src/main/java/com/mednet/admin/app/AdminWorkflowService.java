@@ -215,16 +215,8 @@ public class AdminWorkflowService {
                     HttpStatus.CONFLICT,
                     "This account is linked to existing records, so its account type cannot be changed. Other account details can still be updated.");
         }
-        if (emailChanged && entity.getGoogleSubject() != null && nextPassword == null) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Set a new password when changing the email of a Google-linked account");
-        }
         try {
             entity.updateProfile(nextName, normalizedEmail, nextType);
-            if (emailChanged && entity.getGoogleSubject() != null) {
-                entity.unlinkGoogleSubject();
-            }
             if (nextPassword != null) {
                 entity.setPasswordHash(passwordEncoder.encode(nextPassword));
             }

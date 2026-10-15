@@ -64,17 +64,6 @@ class SecurityConfigTests {
     }
 
     @Test
-    void googleSignInSendsEachRoleToItsWorkspace() {
-        assertThat(SecurityConfig.googleSignInDestination("SUPER_ADMIN")).isEqualTo("/admin");
-        assertThat(SecurityConfig.googleSignInDestination("ADMIN")).isEqualTo("/admin");
-        assertThat(SecurityConfig.googleSignInDestination("PATIENT")).isEqualTo("/patient");
-        assertThat(SecurityConfig.googleSignInDestination("PROVIDER")).isEqualTo("/provider");
-        assertThat(SecurityConfig.googleSignInDestination("LABORATORY")).isEqualTo("/laboratory");
-        assertThat(SecurityConfig.googleSignInDestination("HOME_CARE")).isEqualTo("/home-care");
-        assertThat(SecurityConfig.googleSignInDestination("USER")).isEqualTo("/account");
-    }
-
-    @Test
     void databaseBackedSignInWithoutAccountRepositoryIsReportedAsUnavailable() {
         StaticListableBeanFactory beanFactory = new StaticListableBeanFactory();
         UserDetailsService service = new SecurityConfig().userDetailsService(

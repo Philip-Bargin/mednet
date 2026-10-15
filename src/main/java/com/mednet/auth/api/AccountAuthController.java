@@ -39,8 +39,7 @@ import com.mednet.auth.security.ClientAddressResolver;
 
 @RestController
 @RequestMapping("/api/v1/auth")
-@ConditionalOnExpression(
-        "'${mednet.supabase.auth-enabled:false}' != 'true' && '${spring.datasource.url:}' != ''")
+@ConditionalOnExpression("'${spring.datasource.url:}' != ''")
 public class AccountAuthController {
 
     private static final Duration VERIFICATION_LIFETIME = Duration.ofHours(24);
@@ -62,7 +61,8 @@ public class AccountAuthController {
             PasswordEncoder passwordEncoder,
             AuthTokenService tokens,
             EkdSendEmailService email,
-            @org.springframework.beans.factory.annotation.Value("${NEXTAUTH_URL:http://localhost:3000}") String publicUrl,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${MEDNET_PUBLIC_URL:${NEXTAUTH_URL:http://localhost:3000}}") String publicUrl,
             AuthRateLimiter limiter,
             ClientAddressResolver clients,
             AccountSessions sessions) {
@@ -96,11 +96,6 @@ public class AccountAuthController {
             return verificationDeliveryFailure();
         }
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(registrationResponse());
-    }
-
-    @GetMapping("/verification-mode")
-    public VerificationModeResponse verificationMode() {
-        return new VerificationModeResponse("legacy");
     }
 
     @PostMapping("/resend-verification")
@@ -354,9 +349,6 @@ public class AccountAuthController {
     public record VerificationCodeRequest(
             @NotBlank @Email @Size(max = 254) String email,
             @NotBlank @Pattern(regexp = "\\d{6}") String code) {
-    }
-
-    public record VerificationModeResponse(String mode) {
     }
 
     public record ResetVerificationResponse(String token, String message) {

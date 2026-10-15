@@ -1,6 +1,6 @@
 # MedNet
 
-MedNet is a two-service application: a Spring Boot API (`/`) and a Next.js web client (`web/`). The web service serves the public site and `/admin`; Supabase Auth owns email/password and Google identity, while the API issues Supabase email-verification/recovery tokens, delivers those messages directly through EKDSend, validates Supabase JWTs, and owns MedNet roles, health checks, and PostgreSQL-backed workflows.
+MedNet is a two-service application: a Spring Boot API (`/`) and a Next.js web client (`web/`). The web service serves the public site and `/admin`; the API owns account authentication, session cookies, email verification, password recovery, MedNet roles, health checks, and PostgreSQL-backed workflows. Authentication messages are sent directly through EKDSend.
 
 ## Prerequisites
 
@@ -9,7 +9,7 @@ MedNet is a two-service application: a Spring Boot API (`/`) and a Next.js web c
 - Node.js 20.9 or newer and npm
 - PostgreSQL for persistent admin workflows
 
-The API requires the PostgreSQL datasource for MedNet account roles, provider, clinical, and admin workflows. Set up Supabase Auth, EKDSend, and the rolling legacy-account migration using [Supabase Auth setup](docs/SUPABASE_AUTH_SETUP.md).
+The API requires the PostgreSQL datasource for MedNet accounts, provider, clinical, and admin workflows. Configure the local account flow and EKDSend using [Authentication Setup](docs/AUTHENTICATION_SETUP.md).
 
 ## Run locally
 
@@ -41,8 +41,6 @@ npm run dev
 Open `http://localhost:3000` for the public site or `http://localhost:3000/admin` for the administrator area. In development, the Next.js server proxies `/api/v1/*` to `http://localhost:8080`; set `MEDNET_API_URL` only if the API uses another local origin. In production, LPAD/nginx routes `/api/*` to the API service and `/` to the web service.
 
 Do not reuse the example local credentials in production. Configure production secrets in LPAD as described in [Admin Setup](docs/ADMIN_SETUP.md).
-
-For Google sign-in, configure the Supabase Google provider and callback URLs listed in [Supabase Auth setup](docs/SUPABASE_AUTH_SETUP.md).
 
 ## Verify
 

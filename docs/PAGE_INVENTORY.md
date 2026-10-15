@@ -131,7 +131,7 @@ will be fixed when the doctor overview is built in Phase 4D.
 | Area | Functional (real API) | Partially functional | Presentation-only |
 |---|---|---|---|
 | Public | home, find care (directory + booking), about, services | — | — |
-| Account access | sign-in, register, verify, reset, account | Google sign-in (unit-tested redirects only) | — |
+| Account access | sign-in, register, verify, reset, account | MedNet API session, verification, and password recovery | — |
 | Patient | overview, find a doctor, appointments, messages, consultation, medical information, profile | help (factual guidance) | payments |
 | Doctor | overview, schedule, appointments, consultation, patients, messages, profile | clinical work (results queue per patient) | earnings & payouts |
 | Super admin / admin | overview, users and roles, providers, verification, security, task queue, onboarding, appointments, reports | configuration (read-only status) | escalations |
@@ -149,5 +149,5 @@ Every route above was reviewed; results in `FINAL_FRONTEND_QA.md` §2 and §7.
   every `/preview/*` route answer 404; unknown addresses answer 404 with the branded page (`app/not-found.tsx`,
   new in 5E, no reference design; built from the public shell).
 - **Links:** every internal link on every route state resolves to a route in this inventory; the only API
-  link is Google sign-in's OAuth start.
+  link is the MedNet sign-in page.
 - **No route changes** in Phase 5E: no page was added, removed or renamed apart from the 404 page.

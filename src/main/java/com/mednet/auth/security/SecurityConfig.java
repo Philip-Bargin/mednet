@@ -13,8 +13,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.InternalAuthenticationServiceException;
-import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
-import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
@@ -29,7 +27,6 @@ import org.springframework.security.web.session.HttpSessionEventPublisher;
 import org.springframework.security.web.authentication.AuthenticationFailureHandler;
 import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
-import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -39,7 +36,6 @@ import static org.springframework.security.config.http.SessionCreationPolicy.IF_
 
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
-import org.springframework.security.config.http.SessionCreationPolicy;
 
 import com.mednet.admin.data.PlatformAccountEntity;
 import com.mednet.admin.data.PlatformAccountRepository;
@@ -128,18 +124,13 @@ public class SecurityConfig {
     @Bean
     SecurityFilterChain securityFilterChain(
             HttpSecurity http,
-            ObjectProvider<GoogleOAuth2UserService> googleUserService,
-            ObjectProvider<ClientRegistrationRepository> registrations,
-            @Value("${mednet.google.enabled:false}") boolean googleEnabled,
             @Value("${server.servlet.session.cookie.secure:true}") boolean secureCookies,
             @Value("${mednet.session.absolute-timeout:12h}") Duration absoluteSessionTimeout,
             AuthRateLimiter rateLimiter,
             ClientAddressResolver clientAddresses,
             SessionRegistry sessionRegistry,
             Clock clock,
-            ObjectMapper objectMapper,
-            ObjectProvider<SupabaseJwtAuthenticationConverter> supabaseJwtConverter,
-            @Value("${mednet.supabase.auth-enabled:false}") boolean supabaseAuthEnabled) throws Exception {
+            ObjectMapper objectMapper) throws Exception {
         CookieCsrfTokenRepository csrfTokenRepository = CookieCsrfTokenRepository.withHttpOnlyFalse();
         csrfTokenRepository.setCookieCustomizer(cookie -> cookie
                 .path("/")
@@ -155,9 +146,6 @@ public class SecurityConfig {
         http
                 .csrf(csrf -> {
                     csrf.csrfTokenRepository(csrfTokenRepository);
-                    if (supabaseAuthEnabled) {
-                        csrf.ignoringRequestMatchers("/api/v1/**");
-                    }
                 })
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(
@@ -178,15 +166,10 @@ public class SecurityConfig {
                                 "/api/v1/auth/register",
                                 "/api/v1/auth/verify",
                                 "/api/v1/auth/verify-code",
-                                "/api/v1/auth/verification-mode",
                                 "/api/v1/auth/resend-verification",
                                 "/api/v1/auth/forgot-password",
                                 "/api/v1/auth/reset-password/verify",
-                                "/api/v1/auth/reset-password",
-                                "/api/v1/auth/google/status",
-                                "/api/v1/auth/migrate-legacy",
-                                "/api/v1/auth/prepare-reset",
-                                "/api/v1/auth/oauth2/**")
+                                "/api/v1/auth/reset-password")
                         .permitAll()
                         // The public provider directory, one provider's entry, specialty counts and open times.
                         .requestMatchers(HttpMethod.GET, "/api/v1/providers", "/api/v1/providers/*", "/api/v1/providers/*/availability")
@@ -197,26 +180,16 @@ public class SecurityConfig {
                         // controllers and services still check the role and ownership.
                         .anyRequest()
                         .authenticated())
-                .formLogin(form -> {
-                    if (supabaseAuthEnabled) {
-                        form.disable();
-                    } else {
-                        form.loginProcessingUrl("/api/v1/auth/login")
-                                .usernameParameter("email")
-                                .passwordParameter("password")
-                                .successHandler(loginSuccess)
-                                .failureHandler(loginFailureHandler(objectMapper, rateLimiter, clientAddresses));
-                    }
-                })
-                .logout(logout -> {
-                    if (supabaseAuthEnabled) {
-                        logout.disable();
-                    } else {
-                        logout.logoutUrl("/api/v1/auth/logout")
-                                .logoutSuccessHandler((request, response, authentication) -> response
-                                        .setStatus(HttpServletResponse.SC_NO_CONTENT));
-                    }
-                })
+                .formLogin(form -> form
+                        .loginProcessingUrl("/api/v1/auth/login")
+                        .usernameParameter("email")
+                        .passwordParameter("password")
+                        .successHandler(loginSuccess)
+                        .failureHandler(loginFailureHandler(objectMapper, rateLimiter, clientAddresses)))
+                .logout(logout -> logout
+                        .logoutUrl("/api/v1/auth/logout")
+                        .logoutSuccessHandler((request, response, authentication) -> response
+                                .setStatus(HttpServletResponse.SC_NO_CONTENT)))
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint((request, response, exception) -> writeError(
                                 objectMapper, request, response, HttpServletResponse.SC_UNAUTHORIZED,
@@ -224,81 +197,24 @@ public class SecurityConfig {
                         .accessDeniedHandler((request, response, exception) -> writeError(
                                 objectMapper, request, response, HttpServletResponse.SC_FORBIDDEN,
                                 "FORBIDDEN", "You do not have permission to perform this action")))
-                .sessionManagement(session -> {
-                    if (supabaseAuthEnabled) {
-                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS);
-                    } else {
-                        session.sessionCreationPolicy(IF_REQUIRED)
-                                .sessionFixation(fixation -> fixation.migrateSession())
-                                .sessionConcurrency(concurrency -> concurrency
-                                        .maximumSessions(-1)
-                                        .sessionRegistry(sessionRegistry)
-                                        .expiredSessionStrategy(event -> writeError(
-                                                objectMapper, event.getRequest(), event.getResponse(),
-                                                HttpServletResponse.SC_UNAUTHORIZED, "UNAUTHORIZED", "Sign-in required")));
-                    }
-                });
+                .sessionManagement(session -> session
+                        .sessionCreationPolicy(IF_REQUIRED)
+                        .sessionFixation(fixation -> fixation.migrateSession())
+                        .sessionConcurrency(concurrency -> concurrency
+                                .maximumSessions(-1)
+                                .sessionRegistry(sessionRegistry)
+                                .expiredSessionStrategy(event -> writeError(
+                                        objectMapper, event.getRequest(), event.getResponse(),
+                                        HttpServletResponse.SC_UNAUTHORIZED, "UNAUTHORIZED", "Sign-in required"))));
 
-        if (supabaseAuthEnabled) {
-            http.oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt
-                    .jwtAuthenticationConverter(supabaseJwtConverter.getObject())));
-        } else {
-            http.addFilterBefore(
-                    new SignInRateLimitFilter(rateLimiter, clientAddresses, rateLimited),
-                    UsernamePasswordAuthenticationFilter.class);
-            http.addFilterAfter(
-                    new SessionLifetimeFilter(absoluteSessionTimeout, clock),
-                    SecurityContextHolderFilter.class);
-        }
-
-        GoogleOAuth2UserService configuredUserService = googleUserService.getIfAvailable();
-        if (!supabaseAuthEnabled && googleEnabled && configuredUserService != null
-                && registrations.getIfAvailable() != null) {
-            http.oauth2Login(oauth2 -> oauth2
-                    .authorizationEndpoint(endpoint -> endpoint.baseUri("/api/v1/auth/oauth2/authorization"))
-                    .redirectionEndpoint(endpoint -> endpoint.baseUri("/api/v1/auth/oauth2/callback/*"))
-                    .userInfoEndpoint(endpoint -> endpoint.oidcUserService(
-                            new GoogleOidcUserService(configuredUserService)))
-                    .successHandler((request, response, authentication) -> {
-                        String role = authentication.getAuthorities().stream()
-                                .map(authority -> authority.getAuthority())
-                                .filter(authority -> authority.startsWith("ROLE_"))
-                                .map(authority -> authority.substring("ROLE_".length()))
-                                .filter(authority -> !authority.equals("USER"))
-                                .findFirst()
-                                .orElse("USER");
-                        response.sendRedirect(googleSignInDestination(role));
-                    })
-                    .failureHandler((request, response, exception) -> {
-                        if (exception instanceof OAuth2AuthenticationException oauthException) {
-                            String errorCode = oauthException.getError().getErrorCode();
-                            if ("mednet_authentication_error".equals(errorCode)) {
-                                log.warn("Google sign-in rejected by MedNet account policy: {}",
-                                        oauthException.getError().getDescription());
-                            } else {
-                                log.error("Google OAuth flow failed with error code {}", errorCode, exception);
-                            }
-                        } else {
-                            log.error("Google OAuth flow failed with {}",
-                                    exception.getClass().getSimpleName(), exception);
-                        }
-                        response.sendRedirect("/sign-in?error=google");
-                    }));
-        }
+        http.addFilterBefore(
+                new SignInRateLimitFilter(rateLimiter, clientAddresses, rateLimited),
+                UsernamePasswordAuthenticationFilter.class);
+        http.addFilterAfter(
+                new SessionLifetimeFilter(absoluteSessionTimeout, clock),
+                SecurityContextHolderFilter.class);
 
         return http.build();
-    }
-
-    /** Where Google sign-in lands for each role; matches the web client's home path per role. */
-    static String googleSignInDestination(String role) {
-        return switch (role) {
-            case "ADMIN", "SUPER_ADMIN" -> "/admin";
-            case "PATIENT" -> "/patient";
-            case "PROVIDER" -> "/provider";
-            case "LABORATORY" -> "/laboratory";
-            case "HOME_CARE" -> "/home-care";
-            default -> "/account";
-        };
     }
 
     static AuthenticationFailureHandler loginFailureHandler(ObjectMapper objectMapper) {
@@ -352,4 +268,4 @@ public class SecurityConfig {
                 "detail", message,
                 "meta", Map.of("requestId", requestId == null ? "" : requestId)));
     }
-}
+}

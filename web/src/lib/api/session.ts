@@ -1,6 +1,5 @@
 import { apiRequest } from "./client";
 import { ApiRequestError } from "./errors";
-import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 /** Roles issued by the backend today (see `hasRole` checks in the Spring controllers). */
 export const BACKEND_ROLES = [
@@ -26,8 +25,7 @@ export async function getSession(signal?: AbortSignal): Promise<Session | null> 
   }
 }
 
-/** Ends this browser's Supabase session. */
+/** Ends the current MedNet session. */
 export async function signOut(): Promise<void> {
-  const { error } = await getSupabaseBrowserClient().auth.signOut({ scope: "local" });
-  if (error) throw error;
+  await apiRequest<void>("/auth/logout", { method: "POST" });
 }

@@ -5,11 +5,10 @@ import java.util.Locale;
 import org.springframework.security.core.session.SessionInformation;
 import org.springframework.security.core.session.SessionRegistry;
 import org.springframework.security.core.userdetails.UserDetails;
-import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.stereotype.Component;
 
 /**
- * Ends every signed-in session of an account (password and Google sign-ins) after a change that must
+ * Ends every signed-in session of an account after a change that must
  * take effect immediately: password reset or change, suspension, role or email change, deletion.
  * The registry is per API process, like the session store itself.
  */
@@ -38,8 +37,6 @@ public class AccountSessions {
         String email = null;
         if (principal instanceof UserDetails user) {
             email = user.getUsername();
-        } else if (principal instanceof OAuth2User user) {
-            email = user.getAttribute("email");
         }
         return email == null ? null : email.trim().toLowerCase(Locale.ROOT);
     }
