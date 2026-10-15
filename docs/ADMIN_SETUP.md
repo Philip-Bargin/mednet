@@ -53,7 +53,7 @@ Create a Google OAuth client with application type **Web application**. Add thes
 
 Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and the environment-specific `GOOGLE_REDIRECT_URI` in `.env` locally or LPAD for production. Google is automatically enabled when the client credentials are present. The Google client secret stays on the Spring server; never prefix it with `NEXT_PUBLIC_` or expose it to the web client.
 
-The API service explicitly allowlists the server-side variables it needs in `.lpad/manifest.json`; grouped services receive no project environment variables unless listed there. Keep database, mail, administrator, and Google credentials on the API allowlist only, never the web service.
+All grouped services in an LPAD project receive the project's configured environment variables during build and runtime. Keep secrets in the LPAD project environment, never in source code or client bundles. Treat services in one project as sharing the same secret access; use separate LPAD projects if services need different secret privileges.
 
 Use `GET /api/v1/auth/google/status` to verify the running API, not only the LPAD environment-variable list. When disabled, its `missingConfiguration` array names settings that prevent OAuth activation; it never returns configured values. If all settings are present but the array reports `OAUTH_REGISTRATION_UNAVAILABLE`, inspect the API startup logs and redeploy/restart the API service.
 
