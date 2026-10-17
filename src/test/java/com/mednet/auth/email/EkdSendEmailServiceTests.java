@@ -60,6 +60,7 @@ class EkdSendEmailServiceTests {
                 .contains("\"to\":\"patient@example.test\"")
                 .contains("\"from\":\"configured@example.test\"")
                 .contains("\"html\":\"<p>Verify your email</p>\"")
+                .contains("\"text\":\"Verify your email\"")
                 .contains("\"body\":\"<p>Verify your email</p>\"");
     }
 

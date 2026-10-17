@@ -1,5 +1,10 @@
 # MedNet security audit — Phase 5B and 5B closure (2026-10-11), Phase 5E regression check (2026-10-12)
 
+Historical report: the authentication design has since changed to MedNet-managed account passwords
+and sessions, with verification and recovery email sent through EKDSend. Google/OAuth findings below
+describe the prior implementation and are not current setup instructions. PostgreSQL and deployment
+security findings still require owner review.
+
 Scope: the Spring Boot API, the Next.js web client, configuration and dependencies. All Phase 5B work
 ran **without Supabase**: the database password exposed in a chat on 2026-10-11 has not been rotated
 (the old password was still accepted that day), and no connection has been made with it since. Every

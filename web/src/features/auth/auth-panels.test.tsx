@@ -6,10 +6,12 @@ import { ResetPasswordPanel } from "./reset-password-panel";
 import { SignInPanel } from "./sign-in-panel";
 import { VerifyEmailPanel } from "./verify-email-panel";
 
-/**
- * Component tests with a scripted fetch. They check request contracts and UI states only; live
- * behaviour is verified separately against the running Spring Boot API (e2e/auth.live.spec.ts).
- */
+const routerPush = vi.hoisted(() => vi.fn());
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: routerPush }),
+}));
+
 type Route = { status: number; body?: unknown };
 const routes = new Map<string, Route[]>();
 const calls: Array<{ url: string; init?: RequestInit }> = [];
@@ -22,145 +24,192 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
   const url = String(input);
   calls.push({ url, init });
   const key = `${init?.method ?? "GET"} ${url.split("?")[0]}`;
+  if (key === "GET /api/v1/auth/google/status" && !routes.has(key)) {
+    return Response.json({ enabled: false });
+  }
   const queue = routes.get(key);
   if (key === "GET /api/v1/auth/csrf") return Response.json({ headerName: "X-XSRF-TOKEN", token: "t" });
   if (!queue?.length) throw new Error(`Unexpected request ${key}`);
   const next = queue.length > 1 ? queue.shift()! : queue[0];
-  return next.body === undefined ? new Response(null, { status: next.status }) : Response.json(next.body, { status: next.status });
+  return next.body === undefined
+    ? new Response(null, { status: next.status })
+    : Response.json(next.body, { status: next.status });
 });
 
 const replace = vi.fn();
+const unauthenticated = {
+  status: 401,
+  body: { success: false, error: { code: "UNAUTHORIZED", message: "Sign-in required" } },
+};
 
 beforeEach(() => {
   routes.clear();
   calls.length = 0;
+  routerPush.mockReset();
   vi.stubGlobal("fetch", fetchMock);
   replace.mockReset();
   Object.defineProperty(window, "location", {
     configurable: true,
     value: { ...window.location, replace, search: "", origin: "http://localhost:3000" },
   });
-  on("GET", "/api/v1/auth/google/status", { status: 200, body: { enabled: false } });
 });
 
 afterEach(() => vi.unstubAllGlobals());
 
-const unauthenticated = { status: 401, body: { success: false, error: { code: "UNAUTHORIZED", message: "Sign-in required" } } };
-
 describe("SignInPanel", () => {
   it("redirects an existing session to the role home", async () => {
     on("GET", "/api/v1/auth/session", { status: 200, body: { email: "a@b.lr", role: "SUPER_ADMIN" } });
-    render(<SignInPanel googleError={false} />);
+    render(<SignInPanel />);
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/admin"));
   });
 
-  it("validates fields before calling the API and focuses the first problem", async () => {
+  it("shows Google sign-in only when OAuth is configured by the API", async () => {
     on("GET", "/api/v1/auth/session", unauthenticated);
-    render(<SignInPanel googleError={false} />);
+    on("GET", "/api/v1/auth/google/status", { status: 200, body: { enabled: true } });
+    render(<SignInPanel />);
+    expect(await screen.findByRole("link", { name: "Continue with Google" }))
+      .toHaveAttribute("href", "/oauth2/authorization/google");
+  });
+
+  it("validates fields before attempting API authentication", async () => {
+    on("GET", "/api/v1/auth/session", unauthenticated);
+    render(<SignInPanel />);
     await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
     const email = screen.getByRole("textbox", { name: /Email address/ });
     expect(email).toHaveAttribute("aria-invalid", "true");
     expect(email).toHaveFocus();
-    expect(calls.some((call) => call.url.includes("/auth/login"))).toBe(false);
+    expect(calls.some((call) => call.url === "/api/v1/auth/login")).toBe(false);
   });
 
-  it("signs in with a form-encoded body and redirects a patient to /patient", async () => {
+  it("signs in through MedNet and redirects using the backend role", async () => {
     on("GET", "/api/v1/auth/session", unauthenticated, { status: 200, body: { email: "p@b.lr", role: "PATIENT" } });
-    on("POST", "/api/v1/auth/login", { status: 200, body: {} });
-    render(<SignInPanel googleError={false} />);
+    on("POST", "/api/v1/auth/login", { status: 204 });
+    render(<SignInPanel />);
     await userEvent.type(await screen.findByRole("textbox", { name: /Email address/ }), "p@b.lr");
     await userEvent.type(screen.getByLabelText(/^Password/), "correct horse battery");
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/patient"));
-    const login = calls.find((call) => call.url === "/api/v1/auth/login")!;
-    expect(login.init?.headers).toMatchObject({
-      "Content-Type": "application/x-www-form-urlencoded",
-      "X-XSRF-TOKEN": "t",
+    const loginCall = calls.find((call) => call.url === "/api/v1/auth/login");
+    expect(new URLSearchParams(String(loginCall?.init?.body))).toEqual(
+      new URLSearchParams({ email: "p@b.lr", password: "correct horse battery" }),
+    );
+  });
+
+  it("reports a MedNet login service outage without disguising it as bad credentials", async () => {
+    on("GET", "/api/v1/auth/session", unauthenticated);
+    on("POST", "/api/v1/auth/login", {
+      status: 503,
+      body: { success: false, error: { code: "SERVICE_UNAVAILABLE", message: "Sign-in unavailable" } },
     });
-    expect(String(login.init?.body)).toBe("email=p%40b.lr&password=correct+horse+battery");
-  });
 
-  it("shows the original failure message and offers verification resend on 401", async () => {
-    on("GET", "/api/v1/auth/session", unauthenticated);
-    on("POST", "/api/v1/auth/login", { status: 401, body: { success: false, error: { code: "UNAUTHORIZED", message: "Invalid email or password" } } });
-    render(<SignInPanel googleError={false} />);
-    await userEvent.type(await screen.findByRole("textbox", { name: /Email address/ }), "p@b.lr");
-    await userEvent.type(screen.getByLabelText(/^Password/), "wrong-password-1");
-    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("Sign-in failed. Verify your email and password.");
-    await userEvent.click(screen.getByRole("button", { name: "Resend verification email" }));
-    expect(screen.getByRole("heading", { name: "Resend verification email" })).toBeInTheDocument();
-  });
-
-  it("explains a 503 as temporarily unavailable", async () => {
-    on("GET", "/api/v1/auth/session", unauthenticated);
-    on("POST", "/api/v1/auth/login", { status: 503, body: { success: false, error: { code: "SERVICE_UNAVAILABLE", message: "Sign-in is temporarily unavailable" } } });
-    render(<SignInPanel googleError={false} />);
+    render(<SignInPanel />);
     await userEvent.type(await screen.findByRole("textbox", { name: /Email address/ }), "p@b.lr");
     await userEvent.type(screen.getByLabelText(/^Password/), "any-password-123");
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Sign-in is temporarily unavailable. Please try again shortly.");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Sign-in is temporarily unavailable. Please try again shortly.",
+    );
   });
 
-  it("registers, shows the server message, and returns to sign in", async () => {
+  it("registers through the MedNet API and opens code entry automatically", async () => {
     on("GET", "/api/v1/auth/session", unauthenticated);
-    on("POST", "/api/v1/auth/register", { status: 202, body: { message: "Thanks for signing up." } });
-    render(<SignInPanel googleError={false} />);
+    on("POST", "/api/v1/auth/register", {
+      status: 202,
+      body: { message: "If a new account can be created for this email, we will send a verification link." },
+    });
+    render(<SignInPanel />);
     await userEvent.click(await screen.findByText("Create account"));
     await userEvent.type(screen.getByRole("textbox", { name: /Email address/ }), "new@b.lr");
-    await userEvent.type(screen.getByLabelText(/^Password/), "short");
+    await userEvent.type(screen.getByLabelText(/^Password/), "a-valid-password-123");
     await userEvent.click(screen.getByRole("button", { name: "Create account" }));
-    expect(screen.getByLabelText(/^Password/)).toHaveAccessibleDescription(/At least 12 characters.*Use at least 12 characters/);
 
-    await userEvent.type(screen.getByLabelText(/^Password/), "-but-long-enough");
+    await waitFor(() => expect(routerPush).toHaveBeenCalledWith("/verify?email=new%40b.lr"));
+    const registerCall = calls.find((call) => call.url === "/api/v1/auth/register");
+    expect(JSON.parse(String(registerCall?.init?.body))).toEqual({
+      email: "new@b.lr",
+      password: "a-valid-password-123",
+    });
+  });
+
+  it("opens the code form after resending verification", async () => {
+    on("GET", "/api/v1/auth/session", unauthenticated);
+    on("POST", "/api/v1/auth/login", unauthenticated);
+    on("POST", "/api/v1/auth/resend-verification", {
+      status: 202,
+      body: { message: "A six-digit code will be sent shortly." },
+    });
+
+    render(<SignInPanel />);
+    await userEvent.type(await screen.findByRole("textbox", { name: /Email address/ }), "new@b.lr");
+    await userEvent.type(screen.getByLabelText(/^Password/), "a-valid-password-123");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Resend verification email" }));
+    await userEvent.click(screen.getByRole("button", { name: "Resend verification email" }));
+
+    await waitFor(() => expect(routerPush).toHaveBeenCalledWith("/verify?email=new%40b.lr"));
+  });
+
+  it("shows an actionable message when an account email is already registered", async () => {
+    on("GET", "/api/v1/auth/session", unauthenticated);
+    on("POST", "/api/v1/auth/register", {
+      status: 409,
+      body: {
+        success: false,
+        error: {
+          code: "CONFLICT",
+          message: "An account with this email already exists. Sign in or reset your password.",
+        },
+      },
+    });
+    render(<SignInPanel />);
+    await userEvent.click(await screen.findByText("Create account"));
+    await userEvent.type(screen.getByRole("textbox", { name: /Email address/ }), "existing@b.lr");
+    await userEvent.type(screen.getByLabelText(/^Password/), "a-valid-password-123");
     await userEvent.click(screen.getByRole("button", { name: "Create account" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Thanks for signing up.");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "An account with this email already exists.",
+    );
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Reset password" })).toHaveAttribute(
+      "href",
+      "/reset?email=existing%40b.lr",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(screen.getByRole("heading", { name: "Sign in to MedNet" })).toBeInTheDocument();
-    const body = JSON.parse(String(calls.find((call) => call.url === "/api/v1/auth/register")!.init?.body));
-    expect(body).toEqual({ email: "new@b.lr", password: "short-but-long-enough" });
   });
 
-  it("surfaces the backend's plain-message 503 when verification email cannot be sent", async () => {
+  it("prepares old accounts for recovery and links to the six-digit code step", async () => {
     on("GET", "/api/v1/auth/session", unauthenticated);
-    on("POST", "/api/v1/auth/register", { status: 503, body: { message: "Verification email could not be sent. Please try again shortly." } });
-    render(<SignInPanel googleError={false} />);
-    await userEvent.click(await screen.findByText("Create account"));
-    await userEvent.type(screen.getByRole("textbox", { name: /Email address/ }), "new@b.lr");
-    await userEvent.type(screen.getByLabelText(/^Password/), "a-valid-password");
-    await userEvent.click(screen.getByRole("button", { name: "Create account" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Verification email could not be sent. Please try again shortly.");
-  });
-
-  it("sends a recovery code and links to the code-entry step", async () => {
-    on("GET", "/api/v1/auth/session", unauthenticated);
-    on("POST", "/api/v1/auth/forgot-password", { status: 202, body: { message: "If an account exists for this email, password reset instructions will arrive shortly." } });
-    render(<SignInPanel googleError={false} />);
+    on("POST", "/api/v1/auth/forgot-password", {
+      status: 202,
+      body: { message: "If the account exists, password recovery instructions have been sent." },
+    });
+    render(<SignInPanel />);
     await userEvent.click(await screen.findByRole("button", { name: "Forgot password?" }));
     await userEvent.type(screen.getByRole("textbox", { name: /Email address/ }), "p@b.lr");
-    await userEvent.click(screen.getByRole("button", { name: "Send recovery code" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("password reset instructions");
-    expect(screen.getByRole("link", { name: "Enter your recovery code" })).toHaveAttribute("href", "/reset?email=p%40b.lr");
-  });
+    await userEvent.click(screen.getByRole("button", { name: "Send recovery instructions" }));
 
-  it("shows the Google error notice and the Google option when enabled", async () => {
-    on("GET", "/api/v1/auth/session", unauthenticated);
-    on("GET", "/api/v1/auth/google/status", { status: 200, body: { enabled: true } });
-    render(<SignInPanel googleError />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Google sign-in could not be completed");
-    expect(await screen.findByRole("link", { name: "Continue with Google" })).toHaveAttribute(
+    expect(await screen.findByRole("status")).toHaveTextContent("password recovery instructions");
+    expect(screen.getByRole("link", { name: "Enter your recovery code" })).toHaveAttribute(
       "href",
-      "/api/v1/auth/oauth2/authorization/google",
+      "/reset?email=p%40b.lr",
     );
   });
 });
 
 describe("ResetPasswordPanel", () => {
-  it("starts at the code step from the email link and completes the reset", async () => {
+  it("verifies the recovery code and resets the password through MedNet", async () => {
     window.history.replaceState = vi.fn();
-    on("POST", "/api/v1/auth/reset-password/verify", { status: 200, body: { token: "reset-token", message: "ok" } });
-    on("POST", "/api/v1/auth/reset-password", { status: 200, body: { message: "Password updated. You can now sign in." } });
+    on("POST", "/api/v1/auth/reset-password/verify", {
+      status: 200,
+      body: { token: "reset-ticket", message: "Code verified." },
+    });
+    on("POST", "/api/v1/auth/reset-password", {
+      status: 200,
+      body: { message: "Password updated. You can now sign in." },
+    });
     render(<ResetPasswordPanel initialEmail="p@b.lr" />);
 
     expect(screen.getByRole("heading", { name: "Enter your recovery code" })).toBeInTheDocument();
@@ -172,11 +221,22 @@ describe("ResetPasswordPanel", () => {
     await userEvent.type(screen.getByLabelText(/^New password/), "a-brand-new-password");
     await userEvent.click(screen.getByRole("button", { name: "Update password" }));
     expect(await screen.findByText("Password updated. You can now sign in.")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Continue to sign in" })).toHaveAttribute("href", "/sign-in");
+    const resetCall = calls.find((call) => call.url === "/api/v1/auth/reset-password");
+    expect(JSON.parse(String(resetCall?.init?.body))).toEqual({
+      email: "p@b.lr",
+      token: "reset-ticket",
+      password: "a-brand-new-password",
+    });
   });
 
-  it("shows the backend's invalid-code message", async () => {
-    on("POST", "/api/v1/auth/reset-password/verify", { status: 400, body: { token: null, message: "The code is invalid or expired. Request a new code." } });
+  it("shows an invalid-code error returned by MedNet", async () => {
+    on("POST", "/api/v1/auth/reset-password/verify", {
+      status: 400,
+      body: {
+        success: false,
+        error: { code: "BAD_REQUEST", message: "The code is invalid or expired. Request a new code." },
+      },
+    });
     render(<ResetPasswordPanel initialEmail="p@b.lr" />);
     await userEvent.type(screen.getByRole("textbox", { name: /Six-digit code/ }), "000000");
     await userEvent.click(screen.getByRole("button", { name: "Verify code" }));
@@ -185,21 +245,65 @@ describe("ResetPasswordPanel", () => {
 });
 
 describe("VerifyEmailPanel", () => {
-  it("reports an incomplete link without calling the API", async () => {
-    render(<VerifyEmailPanel />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("This verification link is incomplete.");
-    expect(calls).toHaveLength(0);
-  });
-
-  it("confirms a valid link", async () => {
+  it("shows and focuses the six-digit code field immediately, then verifies through MedNet", async () => {
+    on("POST", "/api/v1/auth/verify-code", {
+      status: 200,
+      body: { message: "Email verified. You can now sign in." },
+    });
     Object.defineProperty(window, "location", {
       configurable: true,
-      value: { ...window.location, search: "?email=p%40b.lr&token=abc", origin: "http://localhost:3000" },
+      value: { ...window.location, search: "?email=p%40b.lr", origin: "http://localhost:3000" },
     });
-    on("GET", "/api/v1/auth/verify", { status: 200, body: { message: "Email verified. You can now sign in." } });
     render(<VerifyEmailPanel />);
-    expect(await screen.findByText("Email verified. You can now sign in.")).toBeInTheDocument();
-    expect(calls[0].url).toBe("/api/v1/auth/verify?email=p%40b.lr&token=abc");
+    const codeInput = await screen.findByRole("textbox", { name: /Six-digit verification code/ });
+    expect(codeInput).toHaveFocus();
+    await userEvent.type(codeInput, "123456");
+    await userEvent.click(screen.getByRole("button", { name: "Verify email" }));
+
+    expect(await screen.findByText("Your email address is confirmed. You can now continue to MedNet.")).toBeInTheDocument();
+    const verifyCall = calls.find((call) => call.url === "/api/v1/auth/verify-code");
+    expect(JSON.parse(String(verifyCall?.init?.body))).toEqual({ email: "p@b.lr", code: "123456" });
+  });
+
+  it("resends a fresh verification code and secure link from the code-entry page", async () => {
+    on("POST", "/api/v1/auth/resend-verification", {
+      status: 202,
+      body: {
+        message:
+          "If an account with this email needs verification, we will send a new six-digit code and secure verification link shortly.",
+      },
+    });
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...window.location, search: "?email=p%40b.lr", origin: "http://localhost:3000" },
+    });
+    render(<VerifyEmailPanel />);
+    await userEvent.click(await screen.findByRole("button", { name: "Resend code and secure link" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "new six-digit code and secure verification link",
+    );
+    const resendCall = calls.find((call) => call.url === "/api/v1/auth/resend-verification");
+    expect(JSON.parse(String(resendCall?.init?.body))).toEqual({ email: "p@b.lr" });
+  });
+
+  it("keeps the one-time verification link working", async () => {
+    on("GET", "/api/v1/auth/verify", {
+      status: 200,
+      body: { message: "Email verified. You can now sign in." },
+    });
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        ...window.location,
+        search: "?email=p%40b.lr&token=single-use-token",
+        origin: "http://localhost:3000",
+      },
+    });
+    render(<VerifyEmailPanel />);
+
+    expect(await screen.findByText("Your email address is confirmed. You can now continue to MedNet.")).toBeInTheDocument();
+    expect(calls.some((call) => call.url.startsWith("/api/v1/auth/verify?email=p%40b.lr"))).toBe(true);
   });
 });
 
@@ -211,7 +315,7 @@ describe("AccountPanel", () => {
     expect(screen.queryByText("admin@b.lr")).not.toBeInTheDocument();
   });
 
-  it("forwards providers to their workspace (Google sign-in lands them on /account)", async () => {
+  it("forwards providers to their workspace", async () => {
     on("GET", "/api/v1/auth/session", { status: 200, body: { email: "doctor@b.lr", role: "PROVIDER" } });
     render(<AccountPanel />);
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/provider"));
@@ -232,7 +336,7 @@ describe("AccountPanel", () => {
     expect(screen.queryByText("care@b.lr")).not.toBeInTheDocument();
   });
 
-  it("shows the session email and a readable account type, then signs out with CSRF", async () => {
+  it("shows the session email and signs out through MedNet", async () => {
     on("GET", "/api/v1/auth/session", { status: 200, body: { email: "patient@b.lr", role: "PATIENT" } });
     on("POST", "/api/v1/auth/logout", { status: 204 });
     render(<AccountPanel />);
@@ -241,8 +345,7 @@ describe("AccountPanel", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
     expect(await screen.findByRole("link", { name: "Go to sign in" })).toHaveAttribute("href", "/sign-in");
-    const logout = calls.find((call) => call.init?.method === "POST");
-    expect((logout?.init?.headers as Record<string, string>)["X-XSRF-TOKEN"]).toBe("t");
+    expect(calls.some((call) => call.url === "/api/v1/auth/logout")).toBe(true);
   });
 
   it("keeps the session and explains a failed sign-out", async () => {

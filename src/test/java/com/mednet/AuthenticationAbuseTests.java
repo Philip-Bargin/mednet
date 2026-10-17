@@ -52,7 +52,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Each test uses its own addresses and accounts because the limiter is shared by the context.
  */
 @SpringBootTest(properties = {
-        "mednet.google.enabled=false",
         "server.servlet.session.cookie.secure=false",
         "spring.datasource.url=jdbc:h2:mem:mednet-abuse;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
         "spring.datasource.username=sa",

@@ -16,14 +16,12 @@ const stepIndex: Record<Step, number> = { request: 0, verify: 1, reset: 2, done:
 const copy: Record<Step, { title: string; description: string }> = {
   request: { title: "Reset your password", description: "Enter your email and we will send a one-time recovery code." },
   verify: { title: "Enter your recovery code", description: "Enter the six-digit code sent to your email address." },
-  reset: { title: "Choose a new password", description: "Your email is verified. Choose a new password for your account." },
+  reset: { title: "Choose a new password", description: "Your code is verified. Choose a new password for your account." },
   done: { title: "Password updated", description: "Your password has been changed successfully." },
 };
 
 /**
  * Password reset by emailed six-digit code: request → verify code → set password.
- * `/reset?email=…` (the link in the reset email) starts at the code step. Same endpoints and
- * messages as the original page.
  */
 export function ResetPasswordPanel({ initialEmail }: { initialEmail: string }) {
   const [step, setStep] = useState<Step>(initialEmail ? "verify" : "request");
@@ -72,9 +70,8 @@ export function ResetPasswordPanel({ initialEmail }: { initialEmail: string }) {
     setError("");
     setMessage("");
     try {
-      const result = await verifyResetCode(email.trim(), code);
-      if (!result.token) throw new Error("Could not verify that code.");
-      setResetToken(result.token);
+      const token = await verifyResetCode(email.trim(), code);
+      setResetToken(token);
       setStep("reset");
       // Remove the email from the address bar once it is no longer needed.
       window.history.replaceState(null, "", "/reset");
@@ -96,8 +93,8 @@ export function ResetPasswordPanel({ initialEmail }: { initialEmail: string }) {
     try {
       const result = await resetPassword(email.trim(), resetToken, password);
       setMessage(result.message ?? "Password updated. You can now sign in.");
-      setResetToken("");
       setCode("");
+      setResetToken("");
       setStep("done");
     } catch (cause) {
       fail(cause, "Password reset failed.");

@@ -24,6 +24,8 @@
         "runtime": "java",
         "routes": [
           "/api/",
+          "/oauth2/",
+          "/login/",
           "/actuator/",
           "/api-docs",
           "/swagger-ui"
@@ -88,6 +90,40 @@
         "description": "Set true for the HTTPS production deployment"
       },
       {
+        "key": "MEDNET_PUBLIC_URL",
+        "description": "Public MedNet origin used in verification and password-reset links",
+        "required": true
+      },
+      {
+        "key": "GOOGLE_CLIENT_ID",
+        "description": "Google OAuth web client ID",
+        "required": true
+      },
+      {
+        "key": "GOOGLE_CLIENT_SECRET",
+        "description": "Google OAuth web client secret",
+        "secret": true,
+        "required": true
+      },
+      {
+        "key": "GOOGLE_REDIRECT_URI",
+        "description": "OAuth callback registered in Google Cloud (production: https://mednet.lpad.ekddigital.com/login/oauth2/code/google)"
+      },
+      {
+        "key": "EKDSEND_API_URL",
+        "description": "EKDSend API base URL (defaults to https://es.ekddigital.com/api/v1)"
+      },
+      {
+        "key": "EKDSEND_API_KEY",
+        "description": "Server-only EKDSend API key for authentication emails",
+        "secret": true,
+        "required": true
+      },
+      {
+        "key": "FROM_EMAIL",
+        "description": "Verified sender address for authentication emails"
+      },
+      {
         "key": "SPRING_DATASOURCE_URL",
         "description": "PostgreSQL JDBC URL for admin workflow persistence",
         "required": true
@@ -102,23 +138,6 @@
         "description": "PostgreSQL application password",
         "secret": true,
         "required": true
-      },
-      {
-        "key": "GOOGLE_OAUTH_ENABLED",
-        "description": "Enable Google sign-in after OAuth credentials are configured"
-      },
-      {
-        "key": "GOOGLE_CLIENT_ID",
-        "description": "Google OAuth web client ID"
-      },
-      {
-        "key": "GOOGLE_CLIENT_SECRET",
-        "description": "Google OAuth web client secret",
-        "secret": true
-      },
-      {
-        "key": "GOOGLE_REDIRECT_URI",
-        "description": "Registered Google OAuth callback URL"
       }
     ]
   },

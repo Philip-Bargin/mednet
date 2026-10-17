@@ -20,7 +20,7 @@ export default async function ResetPage({
     <AuthShell
       eyebrow="Account security"
       title="Reset your password."
-      description="We email a one-time six-digit code to confirm it is you, then you choose a new password."
+      description="Use the six-digit recovery code sent through MedNet’s email service, then choose a new password."
     >
       <ResetPasswordPanel initialEmail={email} />
     </AuthShell>

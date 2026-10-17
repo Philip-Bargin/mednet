@@ -25,7 +25,7 @@ export async function getSession(signal?: AbortSignal): Promise<Session | null> 
   }
 }
 
-/** Ends the session. Mirrors the existing sign-out flow (CSRF + POST /auth/logout). */
-export function signOut(): Promise<void> {
-  return apiRequest<void>("/auth/logout", { method: "POST" });
+/** Ends the current MedNet session. */
+export async function signOut(): Promise<void> {
+  await apiRequest<void>("/auth/logout", { method: "POST" });
 }

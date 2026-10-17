@@ -9,7 +9,7 @@ import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.stereotype.Component;
 
 /**
- * Ends every signed-in session of an account (password and Google sign-ins) after a change that must
+ * Ends every signed-in session of an account after a change that must
  * take effect immediately: password reset or change, suspension, role or email change, deletion.
  * The registry is per API process, like the session store itself.
  */

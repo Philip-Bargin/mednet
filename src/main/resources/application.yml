@@ -17,8 +17,6 @@ mednet:
   admin:
     email: ${MEDNET_ADMIN_EMAIL:}
     password: ${MEDNET_ADMIN_PASSWORD:}
-  google:
-    enabled: ${GOOGLE_OAUTH_ENABLED:false}
   session:
     # Signed-in sessions end this long after sign-in even when active (0 disables).
     absolute-timeout: ${SESSION_ABSOLUTE_TIMEOUT:12h}

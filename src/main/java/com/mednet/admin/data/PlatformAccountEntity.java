@@ -23,11 +23,11 @@ public class PlatformAccountEntity {
     @Column(nullable = false, unique = true, length = 254)
     private String email;
 
-    @Column(name = "display_name", length = 160)
-    private String displayName;
-
     @Column(name = "google_subject", unique = true, length = 255)
     private String googleSubject;
+
+    @Column(name = "display_name", length = 160)
+    private String displayName;
 
     @Column(name = "password_hash", length = 100)
     private String passwordHash;
@@ -40,6 +40,12 @@ public class PlatformAccountEntity {
 
     @Column(name = "verification_token_expires_at")
     private Instant verificationTokenExpiresAt;
+
+    @Column(name = "verification_code_hash", length = 100)
+    private String verificationCodeHash;
+
+    @Column(name = "verification_code_expires_at")
+    private Instant verificationCodeExpiresAt;
 
     @Column(name = "password_reset_token_hash", length = 64)
     private String passwordResetTokenHash;
@@ -100,12 +106,12 @@ public class PlatformAccountEntity {
         return email;
     }
 
-    public String getDisplayName() {
-        return displayName;
-    }
-
     public String getGoogleSubject() {
         return googleSubject;
+    }
+
+    public String getDisplayName() {
+        return displayName;
     }
 
     public String getPasswordHash() {
@@ -122,6 +128,14 @@ public class PlatformAccountEntity {
 
     public Instant getVerificationTokenExpiresAt() {
         return verificationTokenExpiresAt;
+    }
+
+    public String getVerificationCodeHash() {
+        return verificationCodeHash;
+    }
+
+    public Instant getVerificationCodeExpiresAt() {
+        return verificationCodeExpiresAt;
     }
 
     public String getPasswordResetTokenHash() {
@@ -152,11 +166,6 @@ public class PlatformAccountEntity {
         this.status = status;
     }
 
-    public void linkGoogleSubject(String googleSubject) {
-        this.googleSubject = googleSubject;
-        this.emailVerified = true;
-    }
-
     public void changeAccountType(String accountType) {
         this.accountType = accountType;
     }
@@ -165,8 +174,7 @@ public class PlatformAccountEntity {
         if (!this.email.equalsIgnoreCase(email)) {
             this.email = email;
             this.emailVerified = false;
-            this.verificationTokenHash = null;
-            this.verificationTokenExpiresAt = null;
+            clearVerificationTokens();
         }
     }
 
@@ -181,8 +189,7 @@ public class PlatformAccountEntity {
             verifyEmail();
         } else {
             this.emailVerified = false;
-            this.verificationTokenHash = null;
-            this.verificationTokenExpiresAt = null;
+            clearVerificationTokens();
         }
     }
 
@@ -191,8 +198,8 @@ public class PlatformAccountEntity {
         clearPasswordResetToken();
     }
 
-    public void unlinkGoogleSubject() {
-        this.googleSubject = null;
+    public void linkGoogleSubject(String googleSubject) {
+        this.googleSubject = googleSubject;
     }
 
     public void setVerificationToken(String tokenHash, Instant expiresAt) {
@@ -200,10 +207,21 @@ public class PlatformAccountEntity {
         this.verificationTokenExpiresAt = expiresAt;
     }
 
-    public void verifyEmail() {
-        this.emailVerified = true;
+    public void setVerificationCode(String codeHash, Instant expiresAt) {
+        this.verificationCodeHash = codeHash;
+        this.verificationCodeExpiresAt = expiresAt;
+    }
+
+    public void clearVerificationTokens() {
         this.verificationTokenHash = null;
         this.verificationTokenExpiresAt = null;
+        this.verificationCodeHash = null;
+        this.verificationCodeExpiresAt = null;
+    }
+
+    public void verifyEmail() {
+        this.emailVerified = true;
+        clearVerificationTokens();
     }
 
     public void setPasswordResetCode(String tokenHash, Instant expiresAt) {

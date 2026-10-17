@@ -678,7 +678,7 @@ function EditAccountDialog({
       onClose={close}
       dismissible={!busy}
       title={`Edit ${account.publicId}`}
-      description="Changes are recorded in the audit trail. Changing the email of a Google-linked account needs a new password."
+      description="Changes are recorded in the audit trail. Changing an account email requires the address to be verified again."
       footer={
         <>
           <Button variant="tertiary" onClick={close} disabled={busy}>

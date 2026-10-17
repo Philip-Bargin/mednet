@@ -5,7 +5,6 @@ import java.util.List;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Page;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -65,12 +64,6 @@ public class AdminServiceRequestController {
     }
 
     private static String actorEmail(Authentication actor) {
-        if (actor.getPrincipal() instanceof OAuth2User user) {
-            String email = user.getAttribute("email");
-            if (email != null && !email.isBlank()) {
-                return email;
-            }
-        }
         return actor.getName();
     }
 

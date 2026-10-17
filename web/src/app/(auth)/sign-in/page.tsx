@@ -9,20 +9,14 @@ export const metadata: Metadata = {
 
 export const dynamic = "force-dynamic";
 
-export default async function SignInPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ error?: string | string[] }>;
-}) {
-  const params = await searchParams;
-  const googleError = params.error === "google";
+export default function SignInPage() {
   return (
     <AuthShell
       eyebrow="Secure access"
       title="Sign in securely."
-      description="Use your email and password or continue with Google. New accounts start with patient access; provider access requires approval."
+      description="Sign in with your MedNet account or create a new account. New accounts start with patient access; provider access requires approval."
     >
-      <SignInPanel googleError={googleError} />
+      <SignInPanel />
     </AuthShell>
   );
 }

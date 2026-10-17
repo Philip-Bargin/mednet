@@ -13,8 +13,11 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.InternalAuthenticationServiceException;
+import org.springframework.security.oauth2.client.oidc.userinfo.OidcUserRequest;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
-import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
+import org.springframework.security.oauth2.client.userinfo.OAuth2UserService;
+import org.springframework.security.oauth2.core.oidc.user.OidcUser;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
@@ -126,14 +129,15 @@ public class SecurityConfig {
     @Bean
     SecurityFilterChain securityFilterChain(
             HttpSecurity http,
-            ObjectProvider<GoogleOAuth2UserService> googleUserService,
-            ObjectProvider<ClientRegistrationRepository> registrations,
-            @Value("${mednet.google.enabled:false}") boolean googleEnabled,
             @Value("${server.servlet.session.cookie.secure:true}") boolean secureCookies,
             @Value("${mednet.session.absolute-timeout:12h}") Duration absoluteSessionTimeout,
+            @Value("${GOOGLE_CLIENT_ID:}") String googleClientId,
+            @Value("${GOOGLE_CLIENT_SECRET:}") String googleClientSecret,
             AuthRateLimiter rateLimiter,
             ClientAddressResolver clientAddresses,
             SessionRegistry sessionRegistry,
+            ObjectProvider<ClientRegistrationRepository> clientRegistrations,
+            ObjectProvider<GoogleOidcUserService> googleUserServices,
             Clock clock,
             ObjectMapper objectMapper) throws Exception {
         CookieCsrfTokenRepository csrfTokenRepository = CookieCsrfTokenRepository.withHttpOnlyFalse();
@@ -149,7 +153,9 @@ public class SecurityConfig {
         SignInRateLimitFilter.RateLimitResponseWriter rateLimited =
                 (request, response, exception) -> writeRateLimited(objectMapper, request, response, exception);
         http
-                .csrf(csrf -> csrf.csrfTokenRepository(csrfTokenRepository))
+                .csrf(csrf -> {
+                    csrf.csrfTokenRepository(csrfTokenRepository);
+                })
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(
                                 "/actuator/health",
@@ -168,15 +174,17 @@ public class SecurityConfig {
                                 "/api/v1/auth/login",
                                 "/api/v1/auth/register",
                                 "/api/v1/auth/verify",
+                                "/api/v1/auth/verify-code",
                                 "/api/v1/auth/resend-verification",
+                                "/api/v1/auth/google/status",
                                 "/api/v1/auth/forgot-password",
                                 "/api/v1/auth/reset-password/verify",
-                                "/api/v1/auth/reset-password",
-                                "/api/v1/auth/google/status",
-                                "/api/v1/auth/oauth2/**")
+                                "/api/v1/auth/reset-password")
                         .permitAll()
                         // The public provider directory, one provider's entry, specialty counts and open times.
                         .requestMatchers(HttpMethod.GET, "/api/v1/providers", "/api/v1/providers/*", "/api/v1/providers/*/availability")
+                        .permitAll()
+                        .requestMatchers("/oauth2/authorization/**", "/login/oauth2/code/**")
                         .permitAll()
                         .requestMatchers("/api/v1/admin/**", "/api/v1/auth/admin/**")
                         .hasAnyRole("ADMIN", "SUPER_ADMIN")
@@ -209,61 +217,31 @@ public class SecurityConfig {
                                 .sessionRegistry(sessionRegistry)
                                 .expiredSessionStrategy(event -> writeError(
                                         objectMapper, event.getRequest(), event.getResponse(),
-                                        HttpServletResponse.SC_UNAUTHORIZED, "UNAUTHORIZED", "Sign-in required"))))
-                .addFilterBefore(
-                        new SignInRateLimitFilter(rateLimiter, clientAddresses, rateLimited),
-                        UsernamePasswordAuthenticationFilter.class)
-                .addFilterAfter(
-                        new SessionLifetimeFilter(absoluteSessionTimeout, clock),
-                        SecurityContextHolderFilter.class);
+                                        HttpServletResponse.SC_UNAUTHORIZED, "UNAUTHORIZED", "Sign-in required"))));
 
-        GoogleOAuth2UserService configuredUserService = googleUserService.getIfAvailable();
-        if (googleEnabled && configuredUserService != null && registrations.getIfAvailable() != null) {
-            http.oauth2Login(oauth2 -> oauth2
-                    .authorizationEndpoint(endpoint -> endpoint.baseUri("/api/v1/auth/oauth2/authorization"))
-                    .redirectionEndpoint(endpoint -> endpoint.baseUri("/api/v1/auth/oauth2/callback/*"))
-                    .userInfoEndpoint(endpoint -> endpoint.oidcUserService(
-                            new GoogleOidcUserService(configuredUserService)))
-                    .successHandler((request, response, authentication) -> {
-                        String role = authentication.getAuthorities().stream()
-                                .map(authority -> authority.getAuthority())
-                                .filter(authority -> authority.startsWith("ROLE_"))
-                                .map(authority -> authority.substring("ROLE_".length()))
-                                .filter(authority -> !authority.equals("USER"))
-                                .findFirst()
-                                .orElse("USER");
-                        response.sendRedirect(googleSignInDestination(role));
-                    })
+        if (!googleClientId.isBlank()
+                && !googleClientSecret.isBlank()
+                && clientRegistrations.getIfAvailable() != null) {
+            OAuth2UserService<OidcUserRequest, OidcUser> googleUserService =
+                    googleUserServices.getObject();
+            http.oauth2Login(oauth -> oauth
+                    .userInfoEndpoint(userInfo -> userInfo.oidcUserService(googleUserService))
+                    .successHandler((request, response, authentication) ->
+                            response.sendRedirect(roleDestination(authentication)))
                     .failureHandler((request, response, exception) -> {
-                        if (exception instanceof OAuth2AuthenticationException oauthException) {
-                            String errorCode = oauthException.getError().getErrorCode();
-                            if ("mednet_authentication_error".equals(errorCode)) {
-                                log.warn("Google sign-in rejected by MedNet account policy: {}",
-                                        oauthException.getError().getDescription());
-                            } else {
-                                log.error("Google OAuth flow failed with error code {}", errorCode, exception);
-                            }
-                        } else {
-                            log.error("Google OAuth flow failed with {}",
-                                    exception.getClass().getSimpleName(), exception);
-                        }
-                        response.sendRedirect("/sign-in?error=google");
+                        log.warn("Google sign-in failed ({})", exception.getClass().getSimpleName());
+                        response.sendRedirect("/sign-in?googleError=1");
                     }));
         }
 
-        return http.build();
-    }
+        http.addFilterBefore(
+                new SignInRateLimitFilter(rateLimiter, clientAddresses, rateLimited),
+                UsernamePasswordAuthenticationFilter.class);
+        http.addFilterAfter(
+                new SessionLifetimeFilter(absoluteSessionTimeout, clock),
+                SecurityContextHolderFilter.class);
 
-    /** Where Google sign-in lands for each role; matches the web client's home path per role. */
-    static String googleSignInDestination(String role) {
-        return switch (role) {
-            case "ADMIN", "SUPER_ADMIN" -> "/admin";
-            case "PATIENT" -> "/patient";
-            case "PROVIDER" -> "/provider";
-            case "LABORATORY" -> "/laboratory";
-            case "HOME_CARE" -> "/home-care";
-            default -> "/account";
-        };
+        return http.build();
     }
 
     static AuthenticationFailureHandler loginFailureHandler(ObjectMapper objectMapper) {
@@ -317,4 +295,20 @@ public class SecurityConfig {
                 "detail", message,
                 "meta", Map.of("requestId", requestId == null ? "" : requestId)));
     }
-}
+
+    private static String roleDestination(Authentication authentication) {
+        String role = authentication.getAuthorities().stream()
+                .map(authority -> authority.getAuthority())
+                .filter(authority -> authority.startsWith("ROLE_"))
+                .map(authority -> authority.substring("ROLE_".length()))
+                .findFirst()
+                .orElse("PATIENT");
+        return switch (role) {
+            case "ADMIN", "SUPER_ADMIN" -> "/admin";
+            case "PROVIDER" -> "/provider";
+            case "LABORATORY" -> "/laboratory";
+            case "HOME_CARE" -> "/home-care";
+            default -> "/patient";
+        };
+    }
+}

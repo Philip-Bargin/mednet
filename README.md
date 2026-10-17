@@ -1,6 +1,6 @@
 # MedNet
 
-MedNet is a two-service application: a Spring Boot API (`/`) and a Next.js web client (`web/`). The web service serves the public site and `/admin`; the API owns authentication, health checks, and the PostgreSQL-backed administrative endpoints.
+MedNet is a two-service application: a Spring Boot API (`/`) and a Next.js web client (`web/`). The web service serves the public site and `/admin`; the API owns account authentication, session cookies, email verification, password recovery, MedNet roles, health checks, and PostgreSQL-backed workflows. Authentication messages are sent directly through EKDSend.
 
 ## Prerequisites
 
@@ -9,7 +9,7 @@ MedNet is a two-service application: a Spring Boot API (`/`) and a Next.js web c
 - Node.js 20.9 or newer and npm
 - PostgreSQL for persistent admin workflows
 
-The API can start without PostgreSQL for health checks and configured-super-admin access. Database-backed patient registration/sign-in, provider, clinical, and admin workflows remain unavailable until a PostgreSQL JDBC URL is configured.
+The API requires the PostgreSQL datasource for MedNet accounts, provider, clinical, and admin workflows. Configure the local account flow and EKDSend using [Authentication Setup](docs/AUTHENTICATION_SETUP.md).
 
 ## Run locally
 
@@ -42,7 +42,7 @@ Open `http://localhost:3000` for the public site or `http://localhost:3000/admin
 
 Do not reuse the example local credentials in production. Configure production secrets in LPAD as described in [Admin Setup](docs/ADMIN_SETUP.md).
 
-For Google sign-in, enable OAuth in `.env` and register the local and production callback URLs listed in [Admin Setup](docs/ADMIN_SETUP.md). Google credentials are read only by Spring Boot.
+Google sign-in is optional and appears when `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are configured for the API. Register the callback URL listed in [Authentication Setup](docs/AUTHENTICATION_SETUP.md).
 
 ## Verify
 

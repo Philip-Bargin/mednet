@@ -4,9 +4,11 @@
 
 **Phase 5E (final UI/UX, accessibility and cross-role quality audit) is complete as of 2026-10-12 and awaiting
 review.** Phase 5D is approved. The consolidated report is `docs/FINAL_FRONTEND_QA.md`. Still **blocked**,
-unchanged: Supabase password rotation and every PostgreSQL check; Google OAuth end to end; multi-instance
-limits; reverse-proxy configuration; production CSP; review of the existing `postgres` database
-(`docs/SECURITY_AUDIT.md`).
+unchanged: credential rotation and PostgreSQL re-verification; multi-instance limits; reverse-proxy
+configuration; production CSP; review of the existing `postgres` database (`docs/SECURITY_AUDIT.md`).
+Authentication was subsequently changed to MedNet-managed sessions and EKDSend email; older Google OAuth
+and Supabase Auth references in this historical progress log are superseded by
+[`AUTHENTICATION_SETUP.md`](AUTHENTICATION_SETUP.md).
 
 ## Fidelity correction log — header, footer and homepage (2026-10-17)
 

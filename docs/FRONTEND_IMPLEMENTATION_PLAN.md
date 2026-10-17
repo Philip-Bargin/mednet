@@ -5,6 +5,10 @@ Backend contract: `/api/v1` (see `FRONTEND_API_HANDOFF.md`).
 
 **Status: Phases 1–3 approved (2026-10-10). Phase 4 (4A–4G) approved (2026-10-11). Phase 5A (PostgreSQL integration) approved. Phase 5B (offline audit and security closure) approved. Phase 5C (home-care workspace) approved. Phase 5D (performance, pagination, cleanup) complete, awaiting review; PostgreSQL checks and Google OAuth end to end remain blocked; see `FRONTEND_PROGRESS.md` and `SECURITY_AUDIT.md`.**
 
+This plan records historical implementation decisions. Authentication is now MedNet-managed
+cookie sessions with verification and recovery email sent through EKDSend; see
+[`AUTHENTICATION_SETUP.md`](AUTHENTICATION_SETUP.md) for the current flow.
+
 ## 1. Codebase assessment (Phase 1, updated)
 
 | Area | Finding |

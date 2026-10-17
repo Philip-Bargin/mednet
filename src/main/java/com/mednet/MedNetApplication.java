@@ -23,11 +23,7 @@ public class MedNetApplication {
                     "SPRING_DATASOURCE_PASSWORD",
                     "MEDNET_ADMIN_EMAIL",
                     "MEDNET_ADMIN_PASSWORD",
-                    "SESSION_COOKIE_SECURE",
-                    "GOOGLE_OAUTH_ENABLED",
-                    "GOOGLE_CLIENT_ID",
-                    "GOOGLE_CLIENT_SECRET",
-                    "GOOGLE_REDIRECT_URI"
+                    "SESSION_COOKIE_SECURE"
             };
             for (String key : serverKeys) {
                 String value = normalizeEnvironmentValue(context.getEnvironment().getProperty(key));
@@ -44,12 +40,6 @@ public class MedNetApplication {
             if (normalizedEnvironment.containsKey("SPRING_DATASOURCE_PASSWORD")) {
                 normalizedEnvironment.put("spring.datasource.password",
                         normalizedEnvironment.get("SPRING_DATASOURCE_PASSWORD"));
-            }
-            String googleClientId = normalizeEnvironmentValue(context.getEnvironment().getProperty("GOOGLE_CLIENT_ID"));
-            String googleClientSecret = normalizeEnvironmentValue(
-                    context.getEnvironment().getProperty("GOOGLE_CLIENT_SECRET"));
-            if (StringUtils.hasText(googleClientId) && StringUtils.hasText(googleClientSecret)) {
-                normalizedEnvironment.put("mednet.google.enabled", true);
             }
             if (!normalizedEnvironment.isEmpty()) {
                 context.getEnvironment().getPropertySources().addFirst(

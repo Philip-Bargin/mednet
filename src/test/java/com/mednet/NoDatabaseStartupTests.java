@@ -17,7 +17,6 @@ import org.springframework.boot.test.web.server.LocalServerPort;
                 "mednet.admin.email=health-check@example.test",
                 "mednet.admin.password=health-check-password",
                 "server.servlet.session.cookie.secure=false",
-                "mednet.google.enabled=false",
                 "spring.autoconfigure.exclude=org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration,org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration"
         })
 class NoDatabaseStartupTests {
