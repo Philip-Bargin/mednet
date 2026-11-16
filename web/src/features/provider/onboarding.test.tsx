@@ -6,16 +6,38 @@ import { onboardingStates } from "./onboarding-steps";
 import type { ProviderApplication } from "./provider-api";
 
 const posts: unknown[] = [];
+const notificationQueries: string[] = [];
 let applyResponse: { status: number; body: unknown } = { status: 200, body: {} };
+let updates: Array<Record<string, unknown>> = [];
+
+const decision = (title: string, readAt: string | null = null) => ({
+  id: `n-${title.length}`,
+  eventType: "PROVIDER_APPLICATION",
+  title,
+  resourceType: "provider",
+  resourceId: "app-1",
+  createdAt: "2026-11-12T09:00:00Z",
+  readAt,
+});
 
 beforeEach(() => {
   posts.length = 0;
+  notificationQueries.length = 0;
   applyResponse = { status: 200, body: {} };
+  updates = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/auth/csrf")) return Response.json({ headerName: "X-XSRF-TOKEN", token: "t" });
+      if (url.includes("/notifications?") && (init?.method ?? "GET") === "GET") {
+        notificationQueries.push(url.split("?")[1]);
+        return Response.json({ content: updates, totalElements: updates.length, totalPages: 1, number: 0, size: 10 });
+      }
+      const read = url.match(/\/notifications\/([^/]+)\/read$/);
+      if (read && init?.method === "PATCH") {
+        return Response.json({ ...updates.find((item) => item.id === read[1]), readAt: "2026-11-13T09:00:00Z" });
+      }
       if (url.endsWith("/providers/applications") && init?.method === "POST") {
         posts.push(JSON.parse(String(init.body)));
         return Response.json(applyResponse.body, { status: applyResponse.status });
@@ -108,9 +130,33 @@ describe("ApplicantDashboard", () => {
     expect(onApplicationChanged).toHaveBeenCalledTimes(1);
   });
 
-  it("offers a corrected application after a rejection", () => {
+  it("shows review decisions from the notification feed on the dashboard and marks them read", async () => {
+    updates = [decision("Your provider application was not approved")];
+    renderDashboard(application("REJECTED"));
+    const list = await screen.findByRole("list", { name: "Application updates" });
+    expect(within(list).getByText("Your provider application was not approved")).toBeInTheDocument();
+    expect(notificationQueries).toEqual(["page=0&size=10&eventType=PROVIDER_APPLICATION"]);
+    await userEvent.click(within(list).getByRole("button", { name: "Mark as read" }));
+    await waitFor(() => expect(within(list).queryByRole("button", { name: "Mark as read" })).not.toBeInTheDocument());
+    expect(within(list).getByText(/· Read$/)).toBeInTheDocument();
+  });
+
+  it("explains that a decision will appear once the application is reviewed", async () => {
+    renderDashboard(application("PENDING"));
+    expect(await screen.findByText("No decisions yet.")).toBeInTheDocument();
+  });
+
+  it("does not load application updates before an application exists", () => {
+    renderDashboard(null);
+    expect(screen.queryByRole("heading", { name: "Application updates" })).not.toBeInTheDocument();
+    expect(notificationQueries).toEqual([]);
+  });
+
+  it("explains a rejection without inventing a reason, and offers a corrected application", () => {
     renderDashboard(application("REJECTED"));
     expect(screen.getByRole("heading", { name: "Your application was not approved" })).toBeInTheDocument();
+    expect(screen.getByText(/did not approve it\. No reason is recorded with the decision\./)).toBeInTheDocument();
+    expect(screen.getByText(/If you believe the decision is wrong, contact a MedNet administrator\./)).toBeInTheDocument();
     expect(stepText(/Administrator review/)).toHaveTextContent("needs attention");
     expect(screen.getByRole("form", { name: "Submit corrected details" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Submit corrected application" })).toBeInTheDocument();

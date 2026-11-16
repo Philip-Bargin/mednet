@@ -5,7 +5,9 @@ import { usePathname, useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { WorkspaceShell } from "@/components/layout/workspace-shell";
 import { Alert } from "@/components/ui/alert";
+import { ButtonLink } from "@/components/ui/button";
 import { Menu } from "@/components/ui/menu";
+import { StateMessage } from "@/components/ui/state-message";
 import { ApiRequestError, getSession, signOut, type Session } from "@/lib/api";
 import { formatHeaderDate } from "@/features/patient/format";
 import { WorkspaceAccessState, type WorkspaceAccess } from "@/features/workspace/access-state";
@@ -86,6 +88,8 @@ export function ProviderWorkspace({ children }: { children: ReactNode }) {
      * provider sign-up (application null until submitted) or a patient who applied.
      */
     | { state: "applicant"; session: Session; application: ProviderApplication | null }
+    /** The session ended while onboarding was shown — typically a review decision (AdminWorkflowService). */
+    | { state: "applicant-ended" }
   >({ state: "checking" });
   const [application, setApplication] = useState<ApplicationState>({ state: "loading" });
   const [attempt, setAttempt] = useState(0);
@@ -96,10 +100,12 @@ export function ProviderWorkspace({ children }: { children: ReactNode }) {
   useEffect(() => {
     const controller = new AbortController();
     const { signal } = controller;
+    // An applicant whose session ends is told why it may have ended and how to see the outcome.
+    const signedOut = () => setAccess((previous) => (previous.state === "applicant" ? { state: "applicant-ended" } : { state: "signed-out" }));
     getSession(signal)
       .then((session) => {
         if (signal.aborted) return;
-        if (!session) return setAccess({ state: "signed-out" });
+        if (!session) return signedOut();
         if (session.role === "PATIENT") {
           // Applicants sign in with the PATIENT role until approved (SecurityConfig). Show their onboarding
           // here; patients who never applied go to their own workspace. The account type only picks this
@@ -109,7 +115,7 @@ export function ProviderWorkspace({ children }: { children: ReactNode }) {
             .then((application) => !signal.aborted && setAccess({ state: "applicant", session, application }))
             .catch((error) => {
               if (signal.aborted) return;
-              if (error instanceof ApiRequestError && error.isUnauthenticated) return setAccess({ state: "signed-out" });
+              if (error instanceof ApiRequestError && error.isUnauthenticated) return signedOut();
               if (!(error instanceof ApiRequestError && error.status === 404)) return setAccess({ state: "error" });
               if (isProviderApplicant(session)) return setAccess({ state: "applicant", session, application: null });
               setAccess({ state: "redirecting" });
@@ -143,7 +149,7 @@ export function ProviderWorkspace({ children }: { children: ReactNode }) {
   }, [ready, applicationAttempt]);
 
   useEffect(() => {
-    const expire = () => setAccess({ state: "expired" });
+    const expire = () => setAccess((previous) => (previous.state === "applicant" ? { state: "applicant-ended" } : { state: "expired" }));
     window.addEventListener(SESSION_EXPIRED_EVENT, expire);
     return () => window.removeEventListener(SESSION_EXPIRED_EVENT, expire);
   }, []);
@@ -165,6 +171,20 @@ export function ProviderWorkspace({ children }: { children: ReactNode }) {
     } catch {
       setSignOutFailed(true);
     }
+  }
+
+  if (access.state === "applicant-ended") {
+    return (
+      <WorkspaceAccessState access={{ state: "signed-out" }} pathname={pathname} workspaceLabel="Provider onboarding" onRetry={() => undefined}>
+        <StateMessage
+          kind="denied"
+          live
+          title="Sign in again to see your application status"
+          description="Your session has ended. MedNet signs applicants out when an administrator records a decision on their application, so any new access applies from the next sign-in."
+          action={<ButtonLink href={`/sign-in?redirect=${encodeURIComponent("/provider")}`}>Sign in again</ButtonLink>}
+        />
+      </WorkspaceAccessState>
+    );
   }
 
   if (access.state === "applicant") {

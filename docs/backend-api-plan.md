@@ -157,7 +157,7 @@ The current API preserves its established success response bodies for frontend c
 | Home Care    | `/api/v1/home-care-requests`, `/api/v1/partner/service-requests/{id}/schedule` |
 | Lab          | `/api/v1/lab-requests`, `/api/v1/patients/me/lab-results`, `/api/v1/patients/{id}/lab-results/pending`, `/api/v1/lab-results/{id}/review` |
 | Partner work | `/api/v1/partner/service-requests` (assigned `HOME_CARE` / `LABORATORY` work) |
-| Notification | `/api/v1/notifications`, `/api/v1/notifications/{id}/read`                    |
+| Notification | `/api/v1/notifications` (optional `eventType` filter), `/api/v1/notifications/{id}/read` |
 | Admin        | `/api/v1/admin/dashboard`, `/api/v1/admin/providers/pending`                  |
 
 Availability is represented by explicit future instants (ISO-8601 timestamps), not recurring schedules. Providers may

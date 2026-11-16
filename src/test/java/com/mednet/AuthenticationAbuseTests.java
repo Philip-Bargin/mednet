@@ -32,6 +32,7 @@ import jakarta.servlet.http.Cookie;
 import com.mednet.admin.data.PlatformAccountEntity;
 import com.mednet.admin.data.PlatformAccountRepository;
 import com.mednet.auth.email.EkdSendEmailService;
+import com.mednet.notification.app.NotificationService;
 
 import tools.jackson.databind.ObjectMapper;
 
@@ -86,6 +87,9 @@ class AuthenticationAbuseTests {
 
     @Autowired
     private MutableClock clock;
+
+    @Autowired
+    private NotificationService notifications;
 
     @MockitoBean
     private EkdSendEmailService emailService;
@@ -368,6 +372,9 @@ class AuthenticationAbuseTests {
                 .andExpect(jsonPath("$.role").value("PROVIDER"))
                 .andExpect(jsonPath("$.accountType").value("PROVIDER"));
         mockMvc.perform(get("/api/v1/providers/me/patients").cookie(provider)).andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/notifications").param("eventType", "PROVIDER_APPLICATION").cookie(provider))
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].title").value("Your provider application was approved"));
 
         // Suspension also takes effect at once instead of at the next sign-in.
         reviewProvider(applicationId, "SUSPENDED");
@@ -392,10 +399,33 @@ class AuthenticationAbuseTests {
         Cookie again = signedIn(email, "198.51.112.2");
         mockMvc.perform(get("/api/v1/providers/me/application").cookie(again))
                 .andExpect(jsonPath("$.status").value("REJECTED"));
+        // The decision is readable from onboarding without the patient workspace: generic title, no notes.
+        notifications.create(idOf(email), "unrelated:" + UUID.randomUUID(), "APPOINTMENT",
+                "Your appointment status was updated", "appointment", UUID.randomUUID().toString());
+        mockMvc.perform(get("/api/v1/notifications").cookie(again)).andExpect(jsonPath("$.content.length()").value(2));
+        mockMvc.perform(get("/api/v1/notifications").param("eventType", "PROVIDER_APPLICATION").cookie(again))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].title").value("Your provider application was not approved"))
+                .andExpect(jsonPath("$.content[0].resourceType").value("provider"));
+        mockMvc.perform(get("/api/v1/notifications").param("eventType", "provider application;").cookie(again))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(get("/api/v1/providers/me/patients").cookie(again)).andExpect(status().isForbidden());
         apply(again, "Dr. Kollie Wah, MD").andExpect(status().isOk());
         mockMvc.perform(get("/api/v1/providers/me/application").cookie(again))
                 .andExpect(jsonPath("$.status").value("PENDING"))
                 .andExpect(jsonPath("$.displayName").value("Dr. Kollie Wah, MD"));
+    }
+
+    @Test
+    void registrationCannotRequestAPrivilegedAccountType() throws Exception {
+        for (String accountType : new String[] {"ADMIN", "SUPER_ADMIN", "LABORATORY", "HOME_CARE"}) {
+            String email = randomEmail();
+            json(post("/api/v1/auth/register"), "198.51.114.1",
+                    Map.of("email", email, "password", PASSWORD, "accountType", accountType))
+                    .andExpect(status().isBadRequest());
+            assertThat(accounts.findFirstByEmailIgnoreCase(email)).isEmpty();
+        }
     }
 
     @Test

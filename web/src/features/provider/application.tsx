@@ -1,17 +1,20 @@
 "use client";
 
+import { Bell } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Alert } from "@/components/ui/alert";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { TextInput } from "@/components/ui/inputs";
-import { DescriptionList } from "@/components/ui/lists";
+import { ActivityList, ActivityRow, DescriptionList } from "@/components/ui/lists";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StateMessage } from "@/components/ui/state-message";
-import { formatDate } from "@/features/patient/format";
+import { formatDate, formatShortDate } from "@/features/patient/format";
+import type { Notification } from "@/features/patient/patient-api";
+import { ErrorRow, LoadingRows } from "@/features/workspace/states";
 import { ApiRequestError } from "@/lib/api";
-import { actionError } from "@/features/workspace/use-resource";
+import { actionError, useResource } from "@/features/workspace/use-resource";
 import { NotificationPreferencesPanel } from "@/features/workspace/notification-preferences";
 import { OnboardingSteps, onboardingStates, type OnboardingStepId } from "./onboarding-steps";
 import { PROVIDER_LIMITS, providerApi, type ProviderApplication } from "./provider-api";
@@ -25,7 +28,12 @@ import { useProvider } from "./provider-workspace";
 const STATUS: Record<string, { label: string; tone: BadgeTone; explanation: string }> = {
   APPROVED: { label: "Approved", tone: "success", explanation: "A MedNet administrator approved your application. You are listed in the provider directory." },
   PENDING: { label: "Under review", tone: "warning", explanation: "A MedNet administrator is reviewing your application. Scheduling and patient work open once it is approved." },
-  REJECTED: { label: "Not approved", tone: "critical", explanation: "Your application was not approved. You can submit a new application with updated details." },
+  REJECTED: {
+    label: "Not approved",
+    tone: "critical",
+    explanation:
+      "A MedNet administrator reviewed your application and did not approve it. No reason is recorded with the decision. You can check your details and submit a corrected application for a new review.",
+  },
   SUSPENDED: { label: "Suspended", tone: "critical", explanation: "Your provider listing is suspended. Contact a MedNet administrator; a new application cannot be submitted while it is suspended." },
 };
 
@@ -89,12 +97,19 @@ export function ApplicationSummary() {
   return <ApplicationDetails application={application.application} />;
 }
 
-export function ApplicationDetails({ application }: { application: ProviderApplication }) {
+export function ApplicationDetails({
+  application,
+  showExplanation = true,
+}: {
+  application: ProviderApplication;
+  /** Off where the status is already explained above (the onboarding dashboard). */
+  showExplanation?: boolean;
+}) {
   const status = applicationStatus(application.status);
   return (
     <Card>
       <CardHeader eyebrow="Provider application" title={application.displayName} action={<Badge tone={status.tone}>{status.label}</Badge>} />
-      <p className="mt-1.5 text-data text-text-secondary">{status.explanation}</p>
+      {showExplanation ? <p className="mt-1.5 text-data text-text-secondary">{status.explanation}</p> : null}
       <DescriptionList
         columns={2}
         className="mt-5"
@@ -267,14 +282,17 @@ export function ApplicantDashboard({
           intro="Patients see your display name and specialty once you are approved. Administrators use your licence or registration reference to review your application; MedNet does not independently verify credentials."
         />
       ) : (
-        <ApplicationDetails application={application} />
+        <>
+          <ApplicationDetails application={application} showExplanation={false} />
+          <ApplicationUpdates />
+        </>
       )}
 
       {application?.status === "REJECTED" ? (
         <ApplicationForm
           onSubmitted={onApplicationChanged}
           title="Submit corrected details"
-          intro="MedNet does not record a reason with the decision. Check your display name, specialty and licence or registration reference, then submit a corrected application for review."
+          intro="Check that your display name, specialty and licence or registration reference are complete and match your registration, then submit them for a new review. Your previous application stays on record as not approved."
           submitLabel="Submit corrected application"
         />
       ) : null}
@@ -290,7 +308,7 @@ export function ApplicantDashboard({
                 ? "Your application was approved after you signed in. Sign out and sign in again to use the doctor workspace."
                 : application.status === "SUSPENDED"
                   ? "Scheduling and patient work stay closed while your listing is suspended."
-                  : "Your corrected application is reviewed like a new one. Scheduling and patient work stay closed until it is approved."}
+                  : "A corrected application is reviewed like a new one, and scheduling and patient work stay closed until it is approved. If you believe the decision is wrong, contact a MedNet administrator."}
         </p>
         {signOutFailed ? <Alert tone="critical" live="assertive" title="Sign-out failed" className="mt-4" /> : null}
         <div className="mt-5 flex flex-wrap gap-3">
@@ -312,5 +330,71 @@ export function ApplicantDashboard({
         </div>
       </Card>
     </div>
+  );
+}
+
+/**
+ * Review decisions on the dashboard, from the existing notification feed filtered to PROVIDER_APPLICATION.
+ * Applicants never reach the patient workspace, so this is where they read and dismiss these notices.
+ */
+export function ApplicationUpdates() {
+  const { resource, reload, replace } = useResource((signal) => providerApi.applicationUpdates(signal), "application-updates");
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  async function markRead(item: Notification) {
+    setBusyId(item.id);
+    setError("");
+    try {
+      const updated = await providerApi.markNotificationRead(item.id);
+      if (resource.state === "ready") {
+        replace({ ...resource.data, content: resource.data.content.map((entry) => (entry.id === updated.id ? updated : entry)) });
+      }
+    } catch (failure) {
+      setError(actionError(failure, "The update could not be marked as read."));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader eyebrow="Updates" title="Application updates" titleAs="h3" />
+      <div className="mt-4 border-t border-border">
+        {error ? <StateMessage kind="error" layout="inline" className="mt-4" title={error} /> : null}
+        {resource.state === "loading" ? (
+          <LoadingRows label="Loading application updates" rows={1} />
+        ) : resource.state === "error" ? (
+          <ErrorRow title="Application updates could not be loaded." onRetry={reload} status={resource.status} />
+        ) : resource.data.content.length ? (
+          <ActivityList label="Application updates">
+            {resource.data.content.map((item) => (
+              <ActivityRow
+                key={item.id}
+                icon={Bell}
+                tileTone={item.readAt ? "neutral" : "info"}
+                title={item.title}
+                meta={`${formatShortDate(item.createdAt)}${item.readAt ? " · Read" : " · Unread"}`}
+                trailing={
+                  item.readAt ? undefined : (
+                    <Button variant="tertiary" size="sm" loading={busyId === item.id} onClick={() => void markRead(item)}>
+                      Mark as read
+                    </Button>
+                  )
+                }
+              />
+            ))}
+          </ActivityList>
+        ) : (
+          <StateMessage
+            kind="empty"
+            layout="inline"
+            className="mt-4"
+            title="No decisions yet."
+            description="When an administrator approves or does not approve your application, the decision appears here."
+          />
+        )}
+      </div>
+    </Card>
   );
 }

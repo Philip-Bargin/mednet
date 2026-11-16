@@ -85,12 +85,32 @@ export async function stubProviderApi(page: Page, options: ProviderStubOptions =
   const consultations: Record<string, { id: string; appointmentId: string; status: string; openedAt: string; endedAt: string | null }> = {};
   const consultationMessages: Array<{ id: string; senderAccountId: string; body: string; createdAt: string }> = [];
   const messages = [{ id: "m-1", conversationId: "conv-1", senderAccountId: "pat-james", body: "Can I take the medicine with food?", createdAt: iso(-3) }];
+  type StubNotification = { id: string; eventType: string; title: string; resourceType: string; resourceId: string; createdAt: string; readAt: string | null };
+  const notifications: StubNotification[] = options.empty
+    ? []
+    : [{ id: "n-1", eventType: "APPOINTMENT", title: "New appointment request", resourceType: "appointment", resourceId: "apt-request", createdAt: iso(-1), readAt: null }];
+  // AdminWorkflowService notifies the applicant of approvals and rejections (not suspensions).
+  const decide = (status: string) => {
+    if (status !== "APPROVED" && status !== "REJECTED") return;
+    notifications.unshift({
+      id: `n-decision-${notifications.length + 1}`,
+      eventType: "PROVIDER_APPLICATION",
+      title: status === "APPROVED" ? "Your provider application was approved" : "Your provider application was not approved",
+      resourceType: "provider",
+      resourceId: PROVIDER_ID,
+      createdAt: iso(-0.5),
+      readAt: null,
+    });
+  };
+  // Applicant views start with the decision already on record; approved-provider fixtures keep their feed.
+  if (options.role === "PATIENT") decide(application);
   const log: ProviderStubLog = {
     requests: [],
     reads: [],
     expireSession: () => (expired = true),
     review: (status) => {
       application = status;
+      decide(status);
       expired = true;
     },
   };
@@ -126,7 +146,19 @@ export async function stubProviderApi(page: Page, options: ProviderStubOptions =
       application = "PENDING";
       return route.fulfill(json({ id: PROVIDER_ID, ...body, status: "PENDING", createdAt: iso(0), reviewedAt: null }));
     }
-    if (application !== "APPROVED" && path !== "/notifications") return route.fulfill(problem(404, "Approved provider not found"));
+    // Recipient-scoped feed, filterable by eventType like the API; readable before approval.
+    if (path === "/notifications") {
+      const eventType = url.searchParams.get("eventType");
+      return route.fulfill(json(page0(notifications.filter((n) => !eventType || n.eventType === eventType))));
+    }
+    const readMatch = path.match(/^\/notifications\/([^/]+)\/read$/);
+    if (readMatch && method === "PATCH") {
+      const item = notifications.find((n) => n.id === readMatch[1]);
+      if (!item) return route.fulfill(problem(404, "Notification not found"));
+      item.readAt = iso(0);
+      return route.fulfill(json(item));
+    }
+    if (application !== "APPROVED") return route.fulfill(problem(404, "Approved provider not found"));
 
     if (path === `/providers/${PROVIDER_ID}/availability`) return route.fulfill(json(page0(slots)));
     if (path === "/providers/me/availability" && method === "POST") {
@@ -238,7 +270,6 @@ export async function stubProviderApi(page: Page, options: ProviderStubOptions =
       return route.fulfill(json(sent));
     }
     if (path === "/conversations/conv-1/messages") return route.fulfill(json(page0(messages)));
-    if (path === "/notifications") return route.fulfill(json(page0(options.empty ? [] : [{ id: "n-1", eventType: "APPOINTMENT", title: "New appointment request", resourceType: "appointment", resourceId: "apt-request", createdAt: iso(-1), readAt: null }])));
     return route.fulfill(problem(404, `Unstubbed ${method} ${path}`));
   });
   return log;

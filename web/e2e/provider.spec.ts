@@ -373,12 +373,41 @@ test.describe("provider onboarding", () => {
     const log = await stubProviderApi(page, { role: "PATIENT", accountType: "PROVIDER", application: "PENDING" });
     await page.goto("/provider");
     await expect(page.getByRole("heading", { name: "Your application is under review" })).toBeVisible();
+    // Let the dashboard finish loading; any request after the decision would end the session by itself.
+    await expect(page.getByText("No decisions yet.")).toBeVisible();
     log.review("APPROVED");
     await page.getByRole("button", { name: "Check status" }).click();
-    // The signed-out state (StateMessage renders its title as text, not a heading).
-    await expect(page.getByRole("status").filter({ hasText: "Sign in to continue" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Go to sign in" })).toHaveAttribute("href", "/sign-in?redirect=%2Fprovider");
+    // StateMessage renders its title as text, not a heading.
+    await expect(page.getByRole("status").filter({ hasText: "Sign in again to see your application status" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Sign in again" })).toHaveAttribute("href", "/sign-in?redirect=%2Fprovider");
+    await expectNoAxeViolations(page);
     await expect(page.getByText("Your application is under review")).toHaveCount(0);
+  });
+
+  test("review decisions are readable and dismissable on the onboarding dashboard", async ({ page }) => {
+    const log = await stubProviderApi(page, { role: "PATIENT", accountType: "PROVIDER", application: "REJECTED" });
+    await page.goto("/provider");
+    const updates = page.getByRole("list", { name: "Application updates" });
+    await expect(updates.getByText("Your provider application was not approved")).toBeVisible();
+    // Only application decisions are listed; the account's other notifications stay out of onboarding.
+    await expect(updates.getByText("New appointment request")).toHaveCount(0);
+    await expect(page.getByText("No reason is recorded with the decision.", { exact: false })).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    await expectComfortableTargets(page);
+    await expectNoAxeViolations(page);
+    await updates.getByRole("button", { name: "Mark as read" }).click();
+    await expect(updates.getByText(/· Read$/)).toBeVisible();
+    expect(log.requests).toContainEqual(expect.objectContaining({ method: "PATCH", path: expect.stringMatching(/^\/notifications\/n-decision-\d+\/read$/) }));
+  });
+
+  test("a suspension during onboarding ends the session gracefully", async ({ page }) => {
+    const log = await stubProviderApi(page, { role: "PATIENT", accountType: "PROVIDER", application: "PENDING" });
+    await page.goto("/provider");
+    await expect(page.getByText("No decisions yet.")).toBeVisible();
+    log.review("SUSPENDED");
+    await page.getByRole("button", { name: "Check status" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Sign in again to see your application status" })).toBeVisible();
+    await expect(page.getByRole("list", { name: "Application updates" })).toHaveCount(0);
   });
 
   test("an approved provider who signs in again gets the doctor workspace", async ({ page }) => {
