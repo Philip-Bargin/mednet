@@ -10,8 +10,8 @@ import { ApiRequestError, getSession, signOut, type Session } from "@/lib/api";
 import { formatHeaderDate } from "@/features/patient/format";
 import { WorkspaceAccessState, type WorkspaceAccess } from "@/features/workspace/access-state";
 import { SESSION_EXPIRED_EVENT } from "@/features/workspace/use-resource";
-import { WORKSPACES, activeNavItemId, homePathForRole } from "@/features/workspace/workspaces";
-import { ApplicantStatus, ApplicationGate } from "./application";
+import { WORKSPACES, activeNavItemId, homePathForRole, isProviderApplicant } from "@/features/workspace/workspaces";
+import { ApplicantDashboard, ApplicationGate } from "./application";
 import { providerApi, type ProviderApplication } from "./provider-api";
 
 /**
@@ -81,8 +81,11 @@ export function ProviderWorkspace({ children }: { children: ReactNode }) {
   const [access, setAccess] = useState<
     | WorkspaceAccess
     | { state: "ready"; session: Session }
-    /** A PATIENT-role session with a provider application (the backend grants PROVIDER only once approved). */
-    | { state: "applicant"; application: ProviderApplication }
+    /**
+     * A PATIENT-role session in provider onboarding (the backend grants PROVIDER only once approved): a
+     * provider sign-up (application null until submitted) or a patient who applied.
+     */
+    | { state: "applicant"; session: Session; application: ProviderApplication | null }
   >({ state: "checking" });
   const [application, setApplication] = useState<ApplicationState>({ state: "loading" });
   const [attempt, setAttempt] = useState(0);
@@ -98,13 +101,17 @@ export function ProviderWorkspace({ children }: { children: ReactNode }) {
         if (signal.aborted) return;
         if (!session) return setAccess({ state: "signed-out" });
         if (session.role === "PATIENT") {
-          // Applicants sign in with the PATIENT role until approved (SecurityConfig). Show their
-          // application status here; patients who never applied go to their own workspace.
+          // Applicants sign in with the PATIENT role until approved (SecurityConfig). Show their onboarding
+          // here; patients who never applied go to their own workspace. The account type only picks this
+          // view: the API still refuses every provider endpoint to this session.
           providerApi
             .application(signal)
-            .then((application) => !signal.aborted && setAccess({ state: "applicant", application }))
-            .catch(() => {
+            .then((application) => !signal.aborted && setAccess({ state: "applicant", session, application }))
+            .catch((error) => {
               if (signal.aborted) return;
+              if (error instanceof ApiRequestError && error.isUnauthenticated) return setAccess({ state: "signed-out" });
+              if (!(error instanceof ApiRequestError && error.status === 404)) return setAccess({ state: "error" });
+              if (isProviderApplicant(session)) return setAccess({ state: "applicant", session, application: null });
               setAccess({ state: "redirecting" });
               router.replace(homePathForRole(session.role));
             });
@@ -162,8 +169,15 @@ export function ProviderWorkspace({ children }: { children: ReactNode }) {
 
   if (access.state === "applicant") {
     return (
-      <WorkspaceAccessState access={{ state: "checking" }} pathname={pathname} workspaceLabel="Doctor workspace" onRetry={() => undefined}>
-        <ApplicantStatus application={access.application} onSignOut={() => void endSession()} signOutFailed={signOutFailed} />
+      <WorkspaceAccessState access={{ state: "checking" }} pathname={pathname} workspaceLabel="Provider onboarding" onRetry={() => undefined}>
+        <ApplicantDashboard
+          application={access.application}
+          providerAccount={isProviderApplicant(access.session)}
+          // Re-checks the session too: a review decision signs the applicant out (AdminWorkflowService).
+          onApplicationChanged={() => setAttempt((count) => count + 1)}
+          onSignOut={() => void endSession()}
+          signOutFailed={signOutFailed}
+        />
       </WorkspaceAccessState>
     );
   }

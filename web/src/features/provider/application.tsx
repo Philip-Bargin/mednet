@@ -10,8 +10,10 @@ import { DescriptionList } from "@/components/ui/lists";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StateMessage } from "@/components/ui/state-message";
 import { formatDate } from "@/features/patient/format";
+import { ApiRequestError } from "@/lib/api";
 import { actionError } from "@/features/workspace/use-resource";
 import { NotificationPreferencesPanel } from "@/features/workspace/notification-preferences";
+import { OnboardingSteps, onboardingStates, type OnboardingStepId } from "./onboarding-steps";
 import { PROVIDER_LIMITS, providerApi, type ProviderApplication } from "./provider-api";
 import { useProvider } from "./provider-workspace";
 
@@ -63,7 +65,9 @@ export function ApplicationGate() {
   return (
     <div className="flex flex-col gap-6">
       <ApplicationSummary />
-      {application.state === "none" || application.application.status === "REJECTED" ? <ApplicationForm /> : null}
+      {application.state === "none" || application.application.status === "REJECTED" ? (
+        <ApplicationForm onSubmitted={reloadApplication} />
+      ) : null}
     </div>
   );
 }
@@ -111,8 +115,21 @@ export function ApplicationDetails({ application }: { application: ProviderAppli
   );
 }
 
-function ApplicationForm() {
-  const { reloadApplication } = useProvider();
+/**
+ * `POST /providers/applications`. A 409 means an application already exists (for example submitted from
+ * another tab), so the caller reloads and shows it instead of offering a duplicate submission.
+ */
+export function ApplicationForm({
+  onSubmitted,
+  title = "Submit an application",
+  intro,
+  submitLabel = "Submit application",
+}: {
+  onSubmitted: () => void;
+  title?: string;
+  intro?: string;
+  submitLabel?: string;
+}) {
   const [values, setValues] = useState({ displayName: "", specialty: "", credentialReference: "" });
   const [errors, setErrors] = useState<Partial<Record<keyof typeof values, string>>>({});
   const [busy, setBusy] = useState(false);
@@ -140,8 +157,9 @@ function ApplicationForm() {
         specialty: values.specialty.trim(),
         credentialReference: values.credentialReference.trim(),
       });
-      reloadApplication();
+      onSubmitted();
     } catch (error) {
+      if (error instanceof ApiRequestError && error.status === 409) return onSubmitted();
       setFailure(actionError(error, "Your application could not be submitted."));
     } finally {
       setBusy(false);
@@ -150,8 +168,9 @@ function ApplicationForm() {
 
   return (
     <Card>
-      <CardHeader title="Submit an application" titleAs="h3" />
-      <form noValidate onSubmit={submit} className="mt-5 grid gap-4 md:grid-cols-2">
+      <CardHeader title={title} titleAs="h3" />
+      {intro ? <p className="mt-1.5 text-data text-text-secondary">{intro}</p> : null}
+      <form noValidate onSubmit={submit} className="mt-5 grid gap-4 md:grid-cols-2" aria-label={title}>
         <TextInput label="Display name" required maxLength={PROVIDER_LIMITS.displayName} value={values.displayName} error={errors.displayName} description="For example, Dr. Mariama Cole" onChange={set("displayName")} />
         <TextInput label="Specialty" required maxLength={PROVIDER_LIMITS.specialty} value={values.specialty} error={errors.specialty} onChange={set("specialty")} />
         <TextInput
@@ -166,7 +185,7 @@ function ApplicationForm() {
         {failure ? <Alert tone="critical" live="assertive" title={failure} className="md:col-span-2" /> : null}
         <div className="md:col-span-2">
           <Button type="submit" loading={busy}>
-            Submit application
+            {submitLabel}
           </Button>
         </div>
       </form>
@@ -194,34 +213,102 @@ export function ProviderProfile() {
   );
 }
 
+const DASHBOARD: Record<string, { title: string; current: OnboardingStepId | "done"; attention?: boolean }> = {
+  PENDING: { title: "Your application is under review", current: "review" },
+  REJECTED: { title: "Your application was not approved", current: "details", attention: true },
+  SUSPENDED: { title: "Your provider listing is suspended", current: "review", attention: true },
+  APPROVED: { title: "Your application was approved", current: "done" },
+};
+
 /**
- * A PATIENT-role session that has applied to be a provider. The backend grants the PROVIDER role at
- * sign-in only for an approved application, so an application approved after sign-in needs a new
- * sign-in; until then this account uses the patient workspace.
+ * Pending-provider dashboard for a PATIENT-role session: a provider sign-up that has not been approved
+ * (`application` null until professional details are submitted) or a patient who applied. The API grants
+ * the PROVIDER role at sign-in only for an approved application and signs the applicant out when a review
+ * decision is recorded, so nothing here unlocks clinical features; the API refuses them for this session.
  */
-export function ApplicantStatus({
+export function ApplicantDashboard({
   application,
+  providerAccount,
+  onApplicationChanged,
   onSignOut,
   signOutFailed,
 }: {
-  application: ProviderApplication;
+  application: ProviderApplication | null;
+  /** Signed up as a provider (account type PROVIDER) rather than a patient who later applied. */
+  providerAccount: boolean;
+  /** Reloads the session and application, e.g. after submitting or to check the review status. */
+  onApplicationChanged: () => void;
   onSignOut: () => void;
   signOutFailed: boolean;
 }) {
-  const approved = application.status === "APPROVED";
+  const view = application ? DASHBOARD[application.status] : null;
+  const status = application ? applicationStatus(application.status) : null;
+  const states = onboardingStates(view?.current ?? "details", view?.attention);
   return (
     <div className="flex flex-col gap-6">
-      <ApplicationDetails application={application} />
       <Card>
-        <CardHeader title={approved ? "Sign in again to open your doctor workspace" : "Until your application is approved"} titleAs="h3" />
+        <CardHeader
+          eyebrow="Provider onboarding"
+          title={view?.title ?? (application ? status!.label : "Submit your professional details")}
+          action={status ? <Badge tone={status.tone}>{status.label}</Badge> : undefined}
+        />
         <p className="mt-1.5 text-data text-text-secondary">
-          {approved
-            ? "Your application was approved after you signed in. Sign out and sign in again to use the doctor workspace."
-            : "You can keep using MedNet as a patient. The doctor workspace opens after an administrator approves your application and you sign in again."}
+          {status
+            ? status.explanation
+            : "Your account and email are confirmed. Tell MedNet who you are and how your practice is registered so an administrator can review your application."}
+        </p>
+        <OnboardingSteps states={states} detail={status ? { review: status.label } : undefined} className="mt-5" />
+      </Card>
+
+      {!application ? (
+        <ApplicationForm
+          onSubmitted={onApplicationChanged}
+          title="Professional details"
+          intro="Patients see your display name and specialty once you are approved. Administrators use your licence or registration reference to review your application; MedNet does not independently verify credentials."
+        />
+      ) : (
+        <ApplicationDetails application={application} />
+      )}
+
+      {application?.status === "REJECTED" ? (
+        <ApplicationForm
+          onSubmitted={onApplicationChanged}
+          title="Submit corrected details"
+          intro="MedNet does not record a reason with the decision. Check your display name, specialty and licence or registration reference, then submit a corrected application for review."
+          submitLabel="Submit corrected application"
+        />
+      ) : null}
+
+      <Card>
+        <CardHeader title={application?.status === "APPROVED" ? "Sign in again to open your doctor workspace" : "What happens next"} titleAs="h3" />
+        <p className="mt-1.5 text-data text-text-secondary">
+          {!application
+            ? "After you submit your details, an administrator reviews them. Scheduling, appointments and patient records stay closed until your application is approved."
+            : application.status === "PENDING"
+              ? "When an administrator records a decision, MedNet signs you out so your new access applies. Sign in again to see the outcome; an approved application opens the doctor workspace."
+              : application.status === "APPROVED"
+                ? "Your application was approved after you signed in. Sign out and sign in again to use the doctor workspace."
+                : application.status === "SUSPENDED"
+                  ? "Scheduling and patient work stay closed while your listing is suspended."
+                  : "Your corrected application is reviewed like a new one. Scheduling and patient work stay closed until it is approved."}
         </p>
         {signOutFailed ? <Alert tone="critical" live="assertive" title="Sign-out failed" className="mt-4" /> : null}
         <div className="mt-5 flex flex-wrap gap-3">
-          {approved ? <Button onClick={onSignOut}>Sign out</Button> : <ButtonLink href="/patient">Go to the patient workspace</ButtonLink>}
+          {application?.status === "APPROVED" ? (
+            <Button onClick={onSignOut}>Sign out</Button>
+          ) : (
+            <>
+              {application?.status === "PENDING" ? (
+                <Button variant="secondary" onClick={onApplicationChanged}>
+                  Check status
+                </Button>
+              ) : null}
+              {!providerAccount ? <ButtonLink href="/patient">Go to the patient workspace</ButtonLink> : null}
+              <Button variant="secondary" onClick={onSignOut}>
+                Sign out
+              </Button>
+            </>
+          )}
         </div>
       </Card>
     </div>

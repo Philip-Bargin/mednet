@@ -146,6 +146,16 @@ schemas, status codes, and parameters. The current guarded MVP includes:
 - `GET /api/v1/conversations?page=&size=` and `GET /api/v1/patients/me/record-consents?page=&size=` return paginated histories (default size 25, maximum 100). Omitting `page` preserves the existing list responses; conversation pages include only current eligible care relationships.
 - Provider pending laboratory results for a patient accept optional `page` and `size` (default 25, maximum 100); the existing unpaged response shape remains available. Record-consent and care-relationship checks apply to both forms.
 - Provider applications, approved-provider directory, availability, and appointments.
+- Provider sign-up and onboarding: `/sign-up/provider` registers with `POST /api/v1/auth/register`
+  and `"accountType":"PROVIDER"`, then uses the normal email verification. After sign-in,
+  `GET /api/v1/auth/session` reports `role: "PATIENT"` with `accountType: "PROVIDER"` until approval;
+  the client routes that combination to `/provider`, which shows onboarding: the details form
+  (`POST /api/v1/providers/applications`) when `GET /api/v1/providers/me/application` is 404, otherwise
+  the pending-provider dashboard (`PENDING`, `REJECTED` with a corrected application, `SUSPENDED`,
+  `APPROVED`). `PENDING`, `APPROVED` and `SUSPENDED` applications block another submission (`409`);
+  a rejected applicant may submit a new one. Every review decision ends the applicant's sessions, so
+  approval takes effect at the next sign-in. Provider endpoints stay `PROVIDER`-only on the server;
+  `accountType` never grants access.
 - In-app appointment reminders for both participants, generated within 24 hours and again within 1 hour of a confirmed appointment. These reminders are idempotent. Email delivery is enabled through account preferences and sends privacy-safe generic notices (appointment status/time only); SMS and push delivery remain out of scope.
 - Participant-only text conversations associated with confirmed appointments. Providers can record one text consultation outcome with `PUT /api/v1/consultations/{id}/outcome` after ending the session; the backend appends an `ENCOUNTER_SUMMARY` only when the existing patient consent and care-relationship checks pass. The end-session endpoint remains backward compatible.
 - Patient home-care and laboratory requests, assigned partner work queues, and laboratory result review/release.

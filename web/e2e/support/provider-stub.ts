@@ -14,12 +14,18 @@ export type ProviderStubOptions = {
   role?: string;
   /** Application status, or "none" for 404. */
   application?: "APPROVED" | "PENDING" | "REJECTED" | "SUSPENDED" | "none";
+  /** Stored account type reported by /auth/session (PROVIDER with role PATIENT = provider sign-up awaiting approval). */
+  accountType?: string;
   empty?: boolean;
 };
 
 export type ProviderStubLog = {
   requests: Array<{ method: string; path: string; body: unknown; csrf: string | null }>;
+  /** Every GET path requested, to prove which endpoints a view did (not) call. */
+  reads: string[];
   expireSession: () => void;
+  /** An administrator's decision: the application changes and, as the API does, the session ends. */
+  review: (status: "APPROVED" | "REJECTED" | "SUSPENDED") => void;
 };
 
 const page0 = <T,>(content: T[]) => ({ content, totalElements: content.length, totalPages: 1, number: 0, size: 100 });
@@ -79,7 +85,15 @@ export async function stubProviderApi(page: Page, options: ProviderStubOptions =
   const consultations: Record<string, { id: string; appointmentId: string; status: string; openedAt: string; endedAt: string | null }> = {};
   const consultationMessages: Array<{ id: string; senderAccountId: string; body: string; createdAt: string }> = [];
   const messages = [{ id: "m-1", conversationId: "conv-1", senderAccountId: "pat-james", body: "Can I take the medicine with food?", createdAt: iso(-3) }];
-  const log: ProviderStubLog = { requests: [], expireSession: () => (expired = true) };
+  const log: ProviderStubLog = {
+    requests: [],
+    reads: [],
+    expireSession: () => (expired = true),
+    review: (status) => {
+      application = status;
+      expired = true;
+    },
+  };
   const preferences = preferencesStub();
 
   await page.route("**/api/v1/**", async (route, request: Request) => {
@@ -88,11 +102,16 @@ export async function stubProviderApi(page: Page, options: ProviderStubOptions =
     const method = request.method();
     const body = request.postData() ? JSON.parse(request.postData()!) : undefined;
     if (method !== "GET") log.requests.push({ method, path, body, csrf: request.headers()["x-xsrf-token"] ?? null });
+    else log.reads.push(path);
 
     if (path === "/auth/csrf") return route.fulfill(json({ headerName: "X-XSRF-TOKEN", token: "test-token" }));
     if (path === "/auth/google/status") return route.fulfill(json({ enabled: false }));
     if (expired) return route.fulfill(problem(401, "Sign-in required"));
-    if (path === "/auth/session") return route.fulfill(json({ email: "cole@mednet.test", role: options.role ?? "PROVIDER" }));
+    if (path === "/auth/session") {
+      // By default the stored account type matches the role (a patient who applied stays a PATIENT account).
+      const role = options.role ?? "PROVIDER";
+      return route.fulfill(json({ email: "cole@mednet.test", role, accountType: options.accountType ?? role }));
+    }
     if (path === "/auth/logout") {
       expired = true;
       return route.fulfill({ status: 204 });

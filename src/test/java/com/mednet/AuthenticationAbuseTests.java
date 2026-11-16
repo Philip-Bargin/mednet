@@ -10,6 +10,7 @@ import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -96,6 +97,15 @@ class AuthenticationAbuseTests {
         MutableClock testClock() {
             return new MutableClock();
         }
+    }
+
+    /**
+     * Spring Session stamps creation times with the system clock while SessionLifetimeFilter ages sessions
+     * with this clock, so a test that advances it must not leak the offset into later tests (JUnit order).
+     */
+    @AfterEach
+    void resetClock() {
+        clock.reset();
     }
 
     @Test
@@ -318,6 +328,108 @@ class AuthenticationAbuseTests {
         signIn(suspended, PASSWORD, "198.51.110.3").andExpect(status().isUnauthorized());
     }
 
+    @Test
+    void providerSignUpKeepsPatientAccessUntilApprovalAndApprovalSignsTheApplicantOut() throws Exception {
+        when(emailService.send(anyString(), anyString(), anyString(), anyString())).thenReturn(true);
+        String email = randomEmail();
+        json(post("/api/v1/auth/register"), "198.51.111.1",
+                Map.of("email", email, "password", PASSWORD, "accountType", "PROVIDER"))
+                .andExpect(status().isAccepted());
+        PlatformAccountEntity account = accounts.findFirstByEmailIgnoreCase(email).orElseThrow();
+        assertThat(account.getAccountType()).isEqualTo("PROVIDER");
+        account.verifyEmail();
+        accounts.saveAndFlush(account);
+
+        // Signed up as a provider, but the session carries only patient access until approval.
+        Cookie applicant = signedIn(email, "198.51.111.2");
+        mockMvc.perform(get("/api/v1/auth/session").cookie(applicant))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.role").value("PATIENT"))
+                .andExpect(jsonPath("$.accountType").value("PROVIDER"));
+        mockMvc.perform(get("/api/v1/providers/me/patients").cookie(applicant))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/providers/me/application").cookie(applicant))
+                .andExpect(status().isNotFound());
+
+        String applicationId = apply(applicant, "Dr. Abena Sirleaf")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andReturn().getResponse().getContentAsString()
+                .replaceAll(".*\"id\":\"([^\"]+)\".*", "$1");
+        apply(applicant, "Dr. Abena Sirleaf (again)").andExpect(status().isConflict());
+        mockMvc.perform(get("/api/v1/providers/me/patients").cookie(applicant))
+                .andExpect(status().isForbidden());
+
+        reviewProvider(applicationId, "APPROVED");
+        mockMvc.perform(get("/api/v1/auth/session").cookie(applicant)).andExpect(status().isUnauthorized());
+
+        Cookie provider = signedIn(email, "198.51.111.3");
+        mockMvc.perform(get("/api/v1/auth/session").cookie(provider))
+                .andExpect(jsonPath("$.role").value("PROVIDER"))
+                .andExpect(jsonPath("$.accountType").value("PROVIDER"));
+        mockMvc.perform(get("/api/v1/providers/me/patients").cookie(provider)).andExpect(status().isOk());
+
+        // Suspension also takes effect at once instead of at the next sign-in.
+        reviewProvider(applicationId, "SUSPENDED");
+        mockMvc.perform(get("/api/v1/providers/me/patients").cookie(provider)).andExpect(status().isUnauthorized());
+        Cookie suspended = signedIn(email, "198.51.111.4");
+        mockMvc.perform(get("/api/v1/auth/session").cookie(suspended)).andExpect(jsonPath("$.role").value("PATIENT"));
+        apply(suspended, "Dr. Abena Sirleaf").andExpect(status().isConflict());
+    }
+
+    @Test
+    void aRejectedApplicantIsSignedOutAndCanSubmitACorrectedApplication() throws Exception {
+        String email = verifiedAccount("PROVIDER");
+        Cookie applicant = signedIn(email, "198.51.112.1");
+        String applicationId = apply(applicant, "Dr. Kollie Wah")
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString()
+                .replaceAll(".*\"id\":\"([^\"]+)\".*", "$1");
+
+        reviewProvider(applicationId, "REJECTED");
+        mockMvc.perform(get("/api/v1/auth/session").cookie(applicant)).andExpect(status().isUnauthorized());
+
+        Cookie again = signedIn(email, "198.51.112.2");
+        mockMvc.perform(get("/api/v1/providers/me/application").cookie(again))
+                .andExpect(jsonPath("$.status").value("REJECTED"));
+        apply(again, "Dr. Kollie Wah, MD").andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/providers/me/application").cookie(again))
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andExpect(jsonPath("$.displayName").value("Dr. Kollie Wah, MD"));
+    }
+
+    @Test
+    void sessionsReportTheStoredAccountTypeAlongsideTheEffectiveRole() throws Exception {
+        Cookie patient = signedIn(verifiedAccount("PATIENT"), "198.51.113.1");
+        mockMvc.perform(get("/api/v1/auth/session").cookie(patient))
+                .andExpect(jsonPath("$.role").value("PATIENT"))
+                .andExpect(jsonPath("$.accountType").value("PATIENT"));
+        // The configured administrator is provisioned as a SUPER_ADMIN account at startup.
+        mockMvc.perform(get("/api/v1/auth/session").with(user(SUPER_ADMIN).roles("SUPER_ADMIN")))
+                .andExpect(jsonPath("$.role").value("SUPER_ADMIN"))
+                .andExpect(jsonPath("$.accountType").value("SUPER_ADMIN"));
+    }
+
+    private org.springframework.test.web.servlet.ResultActions apply(Cookie session, String displayName) throws Exception {
+        return mockMvc.perform(post("/api/v1/providers/applications")
+                .cookie(session)
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(Map.of(
+                        "displayName", displayName,
+                        "specialty", "Family medicine",
+                        "credentialReference", "LMDC-" + UUID.randomUUID().toString().substring(0, 6)))));
+    }
+
+    private void reviewProvider(String applicationId, String status) throws Exception {
+        mockMvc.perform(patch("/api/v1/admin/providers/{id}/status", applicationId)
+                .with(user(SUPER_ADMIN).roles("SUPER_ADMIN"))
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"status\":\"" + status + "\"}"))
+                .andExpect(status().isOk());
+    }
+
     private String verifiedAccount(String accountType) {
         String email = randomEmail();
         PlatformAccountEntity account = new PlatformAccountEntity(UUID.randomUUID().toString(), email, accountType);
@@ -384,6 +496,10 @@ class AuthenticationAbuseTests {
 
         synchronized void advance(Duration duration) {
             offset = offset.plus(duration);
+        }
+
+        synchronized void reset() {
+            offset = Duration.ZERO;
         }
 
         @Override

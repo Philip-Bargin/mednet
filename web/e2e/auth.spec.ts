@@ -48,6 +48,7 @@ async function expectComfortableTargets(page: Page) {
 
 const pages = [
   { path: "/sign-in", heading: "Sign in securely.", ready: "Sign in to MedNet" },
+  { path: "/sign-up/provider", heading: "Join MedNet as a healthcare provider.", ready: "Create your provider account" },
   { path: "/reset", heading: "Reset your password.", ready: "Reset your password" },
   { path: "/reset?email=patient%40example.test", heading: "Reset your password.", ready: "Enter your recovery code" },
   // Without a legacy link token the page goes straight to the six-digit code form.
@@ -163,6 +164,44 @@ test.describe("account access pages", () => {
     await page.getByRole("button", { name: "Verify code" }).click();
     await expect(page.getByRole("alert").filter({ hasText: "The code is invalid or expired" })).toBeVisible();
     expect(verifyCalls).toBe(1);
+    await expectNoAxeViolations(page);
+  });
+
+  test("provider sign-up registers a PROVIDER account and continues to email verification", async ({ page }) => {
+    await stubAuthApi(page);
+    const bodies: unknown[] = [];
+    await page.route("**/api/v1/auth/register", async (route) => {
+      bodies.push(route.request().postDataJSON());
+      await route.fulfill({ status: 202, json: { message: "Check your email." } });
+    });
+    await page.goto("/sign-in?mode=register");
+    await page.getByRole("link", { name: "sign up as a healthcare provider" }).click();
+    await expect(page).toHaveURL(/\/sign-up\/provider$/);
+    await expect(page.getByRole("list", { name: "Provider sign-up steps" }).locator("li[aria-current=step]")).toContainText(
+      "Create your account",
+    );
+
+    await page.getByRole("button", { name: "Create provider account" }).click();
+    await expect(page.getByRole("textbox", { name: "Professional email address" })).toBeFocused();
+    await page.getByRole("textbox", { name: "Professional email address" }).fill("doctor@example.test");
+    await page.getByRole("textbox", { name: "Password", exact: true }).fill("a-valid-password-123");
+    await page.getByRole("button", { name: "Create provider account" }).click();
+
+    await expect(page).toHaveURL(/\/verify\?email=doctor%40example\.test$/);
+    expect(bodies).toEqual([{ email: "doctor@example.test", password: "a-valid-password-123", accountType: "PROVIDER" }]);
+  });
+
+  test("provider sign-up with a registered email offers to continue the existing application", async ({ page }) => {
+    await stubAuthApi(page);
+    await page.route("**/api/v1/auth/register", (route) =>
+      route.fulfill({ status: 409, json: { success: false, error: { code: "CONFLICT", message: "An account with this email already exists." } } }),
+    );
+    await page.goto("/sign-up/provider");
+    await page.getByRole("textbox", { name: "Professional email address" }).fill("doctor@example.test");
+    await page.getByRole("textbox", { name: "Password", exact: true }).fill("a-valid-password-123");
+    await page.getByRole("button", { name: "Create provider account" }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "An account with this email already exists." })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Sign in to continue", exact: true })).toHaveAttribute("href", "/sign-in?redirect=%2Fprovider");
     await expectNoAxeViolations(page);
   });
 });

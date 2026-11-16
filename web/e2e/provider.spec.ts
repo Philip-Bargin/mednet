@@ -296,3 +296,95 @@ test.describe("doctor workspace", () => {
     await expect(page.getByText(/No open times\./)).toBeVisible();
   });
 });
+
+/**
+ * Provider sign-up onboarding (PATIENT role + PROVIDER account type until an administrator approves).
+ * The API refuses provider endpoints to these sessions; these checks prove the UI neither calls nor shows them.
+ */
+test.describe("provider onboarding", () => {
+  const CLINICAL = /^\/(appointments|providers\/me\/(patients|availability|lab-review-queue)|patients\/|conversations|consultations)/;
+
+  test("a provider sign-up is guided to submit professional details, then sees the review status", async ({ page }) => {
+    const log = await stubProviderApi(page, { role: "PATIENT", accountType: "PROVIDER", application: "none" });
+    await page.goto("/provider");
+    await expect(page.getByRole("heading", { name: "Submit your professional details" })).toBeVisible();
+    const steps = page.getByRole("list", { name: "Provider sign-up steps" });
+    await expect(steps.locator("li[aria-current=step]")).toContainText("Submit your professional details");
+    await expect(page.getByRole("navigation", { name: "Doctor workspace" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Go to the patient workspace" })).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+    await expectComfortableTargets(page);
+    await expectNoAxeViolations(page);
+
+    const form = page.getByRole("form", { name: "Professional details" });
+    await form.getByLabel(/^Display name/).fill("Dr. Abena Sirleaf");
+    await form.getByLabel(/^Specialty/).fill("Family medicine");
+    await form.getByLabel(/^Licence or registration reference/).fill("LMDC-2041");
+    await form.getByRole("button", { name: "Submit application" }).click();
+
+    await expect(page.getByRole("heading", { name: "Your application is under review" })).toBeVisible();
+    await expect(steps.locator("li[aria-current=step]")).toContainText("Administrator review");
+    expect(log.requests.filter((r) => r.path === "/providers/applications")).toEqual([
+      { method: "POST", path: "/providers/applications", body: { displayName: "Dr. Abena Sirleaf", specialty: "Family medicine", credentialReference: "LMDC-2041" }, csrf: "test-token" },
+    ]);
+    await expectNoAxeViolations(page);
+    expect(log.reads.filter((path) => CLINICAL.test(path))).toEqual([]);
+  });
+
+  test("a pending provider opening a clinical page sees onboarding and no clinical data is requested", async ({ page }) => {
+    const log = await stubProviderApi(page, { role: "PATIENT", accountType: "PROVIDER", application: "PENDING" });
+    for (const path of ["/provider/patients", "/provider/schedule", "/provider/clinical-work"]) {
+      await page.goto(path);
+      await expect(page.getByRole("heading", { name: "Your application is under review" })).toBeVisible();
+      await expect(page.getByRole("navigation", { name: "Doctor workspace" })).toHaveCount(0);
+    }
+    expect(log.reads.filter((path) => CLINICAL.test(path))).toEqual([]);
+  });
+
+  test("the patient workspace sends a provider sign-up to onboarding", async ({ page }) => {
+    await stubProviderApi(page, { role: "PATIENT", accountType: "PROVIDER", application: "PENDING" });
+    await page.goto("/patient");
+    await expect(page).toHaveURL(/\/provider$/);
+    await expect(page.getByRole("heading", { name: "Your application is under review" })).toBeVisible();
+  });
+
+  test("a rejected provider sign-up submits corrected details", async ({ page }) => {
+    const log = await stubProviderApi(page, { role: "PATIENT", accountType: "PROVIDER", application: "REJECTED" });
+    await page.goto("/provider");
+    await expect(page.getByRole("heading", { name: "Your application was not approved" })).toBeVisible();
+    await expectNoAxeViolations(page);
+    const form = page.getByRole("form", { name: "Submit corrected details" });
+    await form.getByLabel(/^Display name/).fill("Dr. Abena Sirleaf, MD");
+    await form.getByLabel(/^Specialty/).fill("Family medicine");
+    await form.getByLabel(/^Licence or registration reference/).fill("LMDC-2041");
+    await form.getByRole("button", { name: "Submit corrected application" }).click();
+    await expect(page.getByRole("heading", { name: "Your application is under review" })).toBeVisible();
+    expect(log.requests.filter((r) => r.path === "/providers/applications")).toHaveLength(1);
+  });
+
+  test("a suspended provider cannot submit a new application", async ({ page }) => {
+    await stubProviderApi(page, { role: "PATIENT", accountType: "PROVIDER", application: "SUSPENDED" });
+    await page.goto("/provider");
+    await expect(page.getByRole("heading", { name: "Your provider listing is suspended" })).toBeVisible();
+    await expect(page.getByRole("form")).toHaveCount(0);
+  });
+
+  test("an approval signs the applicant out, and checking the status asks them to sign in again", async ({ page }) => {
+    const log = await stubProviderApi(page, { role: "PATIENT", accountType: "PROVIDER", application: "PENDING" });
+    await page.goto("/provider");
+    await expect(page.getByRole("heading", { name: "Your application is under review" })).toBeVisible();
+    log.review("APPROVED");
+    await page.getByRole("button", { name: "Check status" }).click();
+    // The signed-out state (StateMessage renders its title as text, not a heading).
+    await expect(page.getByRole("status").filter({ hasText: "Sign in to continue" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Go to sign in" })).toHaveAttribute("href", "/sign-in?redirect=%2Fprovider");
+    await expect(page.getByText("Your application is under review")).toHaveCount(0);
+  });
+
+  test("an approved provider who signs in again gets the doctor workspace", async ({ page }) => {
+    await stubProviderApi(page, { role: "PROVIDER", accountType: "PROVIDER", application: "APPROVED" });
+    await page.goto("/provider");
+    await expect(page.getByRole("navigation", { name: "Doctor workspace" })).toBeVisible();
+    await expect(page.getByRole("list", { name: "Provider sign-up steps" })).toHaveCount(0);
+  });
+});

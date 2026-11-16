@@ -146,7 +146,7 @@ The current API preserves its established success response bodies for frontend c
 
 | Group        | Example endpoints                                                             |
 | ------------ | ----------------------------------------------------------------------------- |
-| Auth         | `/api/v1/auth/register`, `/api/v1/auth/login`, `/api/v1/auth/forgot-password`, `/api/v1/auth/reset-password/verify`, `/api/v1/auth/reset-password` |
+| Auth         | `/api/v1/auth/register` (optional `accountType` `PATIENT`/`PROVIDER`), `/api/v1/auth/login`, `/api/v1/auth/session` (`email`, `role`, `accountType`), `/api/v1/auth/forgot-password`, `/api/v1/auth/reset-password/verify`, `/api/v1/auth/reset-password` |
 | Patient      | `/api/v1/patients/me/profile`, `/api/v1/patients/me/records`, `/api/v1/patients/{patientAccountId}/records`, `/api/v1/patients/me/record-consents` |
 | Provider     | `/api/v1/providers` (approved directory), `/api/v1/providers/applications`, `/api/v1/providers/me/application`, `/api/v1/providers/me/availability`, `/api/v1/providers/{id}/availability` |
 | Appointment  | `/api/v1/appointments`, `/api/v1/appointments/{id}` (patient requests remain pending until provider confirmation) |
