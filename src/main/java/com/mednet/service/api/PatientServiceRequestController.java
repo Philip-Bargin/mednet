@@ -3,6 +3,7 @@ package com.mednet.service.api;
 import java.util.List;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.data.domain.Page;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -11,6 +12,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.mednet.service.app.PatientServiceRequestService;
@@ -33,8 +35,21 @@ public class PatientServiceRequestController {
     }
 
     @GetMapping("/home-care-requests")
-    public List<PatientServiceRequestDetails> homeCareRequests(Authentication actor) {
-        return service.listPatient(actor.getName(), "HOME_CARE");
+    public List<PatientServiceRequestDetails> homeCareRequests(
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String search,
+            Authentication actor) {
+        return service.listPatient(actor.getName(), "HOME_CARE", status, search);
+    }
+
+    @GetMapping(value = "/home-care-requests", params = "page")
+    public Page<PatientServiceRequestDetails> homeCareRequestsPage(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String search,
+            Authentication actor) {
+        return service.pagePatient(actor.getName(), "HOME_CARE", status, search, page, size);
     }
 
     @PostMapping("/home-care-requests")
@@ -52,8 +67,21 @@ public class PatientServiceRequestController {
     }
 
     @GetMapping("/lab-requests")
-    public List<PatientServiceRequestDetails> labRequests(Authentication actor) {
-        return service.listPatient(actor.getName(), "LABORATORY");
+    public List<PatientServiceRequestDetails> labRequests(
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String search,
+            Authentication actor) {
+        return service.listPatient(actor.getName(), "LABORATORY", status, search);
+    }
+
+    @GetMapping(value = "/lab-requests", params = "page")
+    public Page<PatientServiceRequestDetails> labRequestsPage(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String search,
+            Authentication actor) {
+        return service.pagePatient(actor.getName(), "LABORATORY", status, search, page, size);
     }
 
     @PostMapping("/lab-requests")

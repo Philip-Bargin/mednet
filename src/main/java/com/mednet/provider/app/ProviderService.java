@@ -10,15 +10,17 @@ import java.util.stream.Collectors;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.mednet.api.Pagination;
 import com.mednet.admin.data.AdminAuditEventEntity;
 import com.mednet.admin.data.AdminAuditEventRepository;
+import com.mednet.patient.app.PatientCareAccess;
+import com.mednet.patient.data.PatientProfileRepository;
 import com.mednet.notification.app.NotificationService;
 import com.mednet.provider.data.ProviderApplicationEntity;
 import com.mednet.provider.data.ProviderApplicationRepository;
@@ -34,26 +36,56 @@ public class ProviderService {
     private final ProviderAvailabilitySlotRepository slots;
     private final AdminAuditEventRepository auditEvents;
     private final NotificationService notifications;
+    private final PatientCareAccess careAccess;
+    private final PatientProfileRepository patientProfiles;
 
     public ProviderService(
             ProviderApplicationRepository applications,
             ProviderAvailabilitySlotRepository slots,
             AdminAuditEventRepository auditEvents,
-            NotificationService notifications) {
+            NotificationService notifications,
+            PatientCareAccess careAccess,
+            PatientProfileRepository patientProfiles) {
         this.applications = applications;
         this.slots = slots;
         this.auditEvents = auditEvents;
         this.notifications = notifications;
+        this.careAccess = careAccess;
+        this.patientProfiles = patientProfiles;
+    }
+
+    @Transactional(readOnly = true)
+    public Page<ProviderPatientSummary> patients(String actorEmail, int page, int size) {
+        var provider = careAccess.requireApprovedProviderByEmail(actorEmail);
+        return patientProfiles.findProviderCarePatients(
+                        provider.getId(),
+                        PatientCareAccess.CARE_STATUSES,
+                        Pagination.pageRequest(
+                                page,
+                                size,
+                                Sort.by(Sort.Order.asc("fullName"), Sort.Order.asc("accountId"))))
+                .map(entry -> new ProviderPatientSummary(entry.getPatientAccountId(), entry.getName()));
+    }
+
+    @Transactional(readOnly = true)
+    public ProviderPatientSummary patient(String actorEmail, String patientAccountId) {
+        var provider = careAccess.requireApprovedProviderByEmail(actorEmail);
+        return patientProfiles.findProviderCarePatient(
+                        patientAccountId, provider.getId(), PatientCareAccess.CARE_STATUSES)
+                .map(entry -> new ProviderPatientSummary(entry.getPatientAccountId(), entry.getName()))
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "Patient not found"));
     }
 
     @Transactional(readOnly = true)
     public Page<ProviderDirectoryEntry> directory(int page, int size, String specialty, String search) {
-        int safePage = Math.max(0, page);
-        int safeSize = Math.min(Math.max(1, size), 100);
         Page<ProviderApplicationEntity> providers = applications.findApprovedDirectory(
                 normalizeFilter(specialty),
                 normalizeFilter(search),
-                PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.ASC, "displayName")));
+                Pagination.pageRequest(
+                        page,
+                        size,
+                        Sort.by(Sort.Order.asc("displayName"), Sort.Order.asc("id"))));
         // One grouped query for the page's next open times, instead of one availability call per provider.
         Map<String, Instant> nextOpen = providers.isEmpty()
                 ? Map.of()
@@ -183,5 +215,8 @@ public class ProviderService {
     }
 
     public record SpecialtyCount(String specialty, long providers) {
+    }
+
+    public record ProviderPatientSummary(String patientAccountId, String name) {
     }
 }

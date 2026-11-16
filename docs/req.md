@@ -333,6 +333,8 @@ Each module below states its purpose, the roles involved, the numbered requireme
 | FR-028 | A provider must be able to record the outcome of the consultation to the patient's medical record. | Must     | Derived   |
 | FR-029 | A consultation must only be accessible to the patient and provider concerned.                      | Must     | Derived   |
 
+Guarded-MVP implementation note: after ending a text consultation, its provider can append one encounter summary to the patient record through the API. This uses the existing active-care-relationship and explicit patient-consent checks; it does not enable audiovisual recording or prescribing, and does not resolve the open policy questions below.
+
 #### Rules, Dependencies, and Acceptance
 
 | Business rules      | Only the patient and the provider named on the appointment may join that consultation. Every completed consultation should leave a record in the patient's medical history.                                                                                                                                                                                                                                                                                                   |
@@ -674,6 +676,8 @@ The following notification catalogue is derived from the events described in Sec
 | NT-13 | Laboratory request received and routed                   | Patient                          | Must     | To confirm |
 | NT-14 | Laboratory result available                              | Patient                          | Must     | To confirm |
 | NT-15 | New provider application awaiting review                 | Administrator                    | Must     | To confirm |
+
+Current guarded-MVP implementation note (not client approval): confirmed appointments generate in-app reminders for both participants within 24 hours and again within 1 hour of the start time. This implementation choice does not resolve the broader notification-channel questions in OQ-43 and OQ-44.
 
 Recommendation for client consideration: notifications should announce that something requires attention without disclosing clinical detail outside the platform, since notifications may be seen on a shared or unlocked device. This is captured as FR-064 and requires client confirmation.
 

@@ -6,7 +6,6 @@ import java.util.UUID;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -15,6 +14,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.mednet.admin.data.AdminAuditEventEntity;
 import com.mednet.admin.data.AdminAuditEventRepository;
+import com.mednet.api.Pagination;
 import com.mednet.admin.data.PlatformAccountEntity;
 import com.mednet.admin.data.PlatformAccountRepository;
 import com.mednet.notification.app.NotificationService;
@@ -94,27 +94,42 @@ public class AppointmentService {
 
     @Transactional(readOnly = true)
     public Page<AppointmentDetails> list(String actorEmail, String role, int page, int size) {
-        int safePage = Math.max(0, page);
-        int safeSize = Math.min(Math.max(1, size), 100);
-        PageRequest pageable = PageRequest.of(
-                safePage, safeSize, Sort.by(Sort.Direction.DESC, "createdAt"));
+        var pageable = Pagination.pageRequest(
+                page,
+                size,
+                Sort.by(Sort.Order.desc("createdAt"), Sort.Order.asc("id")));
         if ("PATIENT".equals(role)) {
             PlatformAccountEntity patient = patient(actorEmail);
-            return appointments.findByPatientAccountIdOrderByCreatedAtDesc(patient.getId(), pageable)
+            return appointments.findByPatientAccountId(patient.getId(), pageable)
                     .map(this::details);
         }
         ProviderApplicationEntity provider = approvedProvider(actorEmail);
-        return appointments.findByProviderApplicationIdOrderByCreatedAtDesc(provider.getId(), pageable)
+        return appointments.findByProviderApplicationId(provider.getId(), pageable)
+                .map(this::details);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<AppointmentDetails> listProviderPatient(
+            String actorEmail, String patientAccountId, int page, int size) {
+        ProviderApplicationEntity provider = approvedProvider(actorEmail);
+        careAccess.requirePatientById(patientAccountId);
+        careAccess.requireCareRelationship(patientAccountId, provider.getId());
+        var pageable = Pagination.pageRequest(
+                page,
+                size,
+                Sort.by(Sort.Order.desc("createdAt"), Sort.Order.asc("id")));
+        return appointments.findByProviderApplicationIdAndPatientAccountId(
+                        provider.getId(), patientAccountId, pageable)
                 .map(this::details);
     }
 
     @Transactional
     public Page<AdminAppointmentSummary> adminList(String actorEmail, int page, int size) {
-        int safePage = Math.max(0, page);
-        int safeSize = Math.min(Math.max(1, size), 100);
         Page<AdminAppointmentSummary> result = appointments
-                .findAll(PageRequest.of(
-                        safePage, safeSize, Sort.by(Sort.Direction.DESC, "createdAt")))
+                .findAll(Pagination.pageRequest(
+                        page,
+                        size,
+                        Sort.by(Sort.Order.desc("createdAt"), Sort.Order.asc("id"))))
                 .map(appointment -> {
                     ProviderAvailabilitySlotEntity slot = slots.findById(appointment.getAvailabilitySlotId())
                             .orElseThrow(AppointmentService::notFound);
@@ -232,11 +247,27 @@ public class AppointmentService {
 
         AppointmentEntity saved = appointments.save(appointment);
         audit(actorEmail, "appointment." + normalizedAction.toLowerCase(Locale.ROOT), saved.getId());
-        String recipientAccountId = "PATIENT".equals(role)
-                ? careAccess.requireActiveProviderAccount(provider.getEmail()).getId()
-                : saved.getPatientAccountId();
-        notify(recipientAccountId, saved.getId(), "Your appointment status was updated");
+        if ("CANCEL".equals(normalizedAction)) {
+            PlatformAccountEntity providerAccount = careAccess.requireActiveProviderAccount(provider.getEmail());
+            notifyCancellation(saved.getPatientAccountId(), saved.getId());
+            notifyCancellation(providerAccount.getId(), saved.getId());
+        } else {
+            String recipientAccountId = "PATIENT".equals(role)
+                    ? careAccess.requireActiveProviderAccount(provider.getEmail()).getId()
+                    : saved.getPatientAccountId();
+            notify(recipientAccountId, saved.getId(), "Your appointment status was updated");
+        }
         return details(saved);
+    }
+
+    private void notifyCancellation(String recipientAccountId, String appointmentId) {
+        notifications.create(
+                recipientAccountId,
+                "appointment:" + appointmentId + ":cancelled:" + recipientAccountId,
+                "APPOINTMENT",
+                "An appointment was cancelled",
+                "appointment",
+                appointmentId);
     }
 
     private void notify(String recipientAccountId, String appointmentId, String title) {
