@@ -1,4 +1,5 @@
 import type { Page, Request } from "@playwright/test";
+import { pageOf, preferencesStub } from "./paging";
 
 /**
  * In-browser stand-in for the provider APIs (shapes from the Spring records). Real integration is
@@ -79,9 +80,11 @@ export async function stubProviderApi(page: Page, options: ProviderStubOptions =
   const consultationMessages: Array<{ id: string; senderAccountId: string; body: string; createdAt: string }> = [];
   const messages = [{ id: "m-1", conversationId: "conv-1", senderAccountId: "pat-james", body: "Can I take the medicine with food?", createdAt: iso(-3) }];
   const log: ProviderStubLog = { requests: [], expireSession: () => (expired = true) };
+  const preferences = preferencesStub();
 
   await page.route("**/api/v1/**", async (route, request: Request) => {
-    const path = new URL(request.url()).pathname.replace("/api/v1", "");
+    const url = new URL(request.url());
+    const path = url.pathname.replace("/api/v1", "");
     const method = request.method();
     const body = request.postData() ? JSON.parse(request.postData()!) : undefined;
     if (method !== "GET") log.requests.push({ method, path, body, csrf: request.headers()["x-xsrf-token"] ?? null });
@@ -94,6 +97,7 @@ export async function stubProviderApi(page: Page, options: ProviderStubOptions =
       expired = true;
       return route.fulfill({ status: 204 });
     }
+    if (path === "/notifications/preferences") return route.fulfill(json(preferences(method, body)));
 
     if (path === "/providers/me/application") {
       if (application === "none") return route.fulfill(problem(404, "Provider application not found"));
@@ -168,6 +172,25 @@ export async function stubProviderApi(page: Page, options: ProviderStubOptions =
         json({ ...page0(entries), totalPendingResults: pending.length, patientsWithoutRecordAccess: options.empty ? 0 : 1 }),
       );
     }
+    // Care patients: a CONFIRMED, COMPLETED or RESCHEDULE_REQUESTED appointment with this provider
+    // (PatientCareAccess.CARE_STATUSES), sorted by name as ProviderService does.
+    const carePatients = () =>
+      [...new Map(
+        appointments
+          .filter((a) => ["CONFIRMED", "COMPLETED", "RESCHEDULE_REQUESTED"].includes(a.status))
+          .map((a) => [a.patientAccountId, { patientAccountId: a.patientAccountId, name: a.patientName }]),
+      ).values()].sort((a, b) => a.name.localeCompare(b.name));
+    if (path === "/providers/me/patients") return route.fulfill(json(pageOf(carePatients(), url)));
+    const carePatientMatch = path.match(/^\/providers\/me\/patients\/([^/]+)(\/appointments)?$/);
+    if (carePatientMatch) {
+      const patient = carePatients().find((p) => p.patientAccountId === carePatientMatch[1]);
+      if (!carePatientMatch[2]) return route.fulfill(patient ? json(patient) : problem(404, "Patient not found"));
+      if (!patient) return route.fulfill(problem(403, "A confirmed care relationship is required"));
+      const history = appointments
+        .filter((a) => a.patientAccountId === patient.patientAccountId)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      return route.fulfill(json(pageOf(history, url)));
+    }
     const patientMatch = path.match(/^\/patients\/([^/]+)\/(records|vitals|lab-results\/pending)$/);
     if (patientMatch) {
       // Evelyn has a care relationship but has not granted consent.
@@ -180,7 +203,7 @@ export async function stubProviderApi(page: Page, options: ProviderStubOptions =
       }
       if (patientMatch[2] === "records") return route.fulfill(json(page0(records)));
       if (patientMatch[2] === "vitals") return route.fulfill(json(page0([{ id: "v-1", metric: "Weight", value: 72.5, unit: "kg", recordedAt: iso(-20), source: "PATIENT_REPORTED" }])));
-      return route.fulfill(json(pending));
+      return route.fulfill(json(url.searchParams.has("page") ? pageOf(pending, url) : pending));
     }
     const reviewMatch = path.match(/^\/lab-results\/([^/]+)\/review$/);
     if (reviewMatch) {

@@ -50,7 +50,8 @@ const pages = [
   { path: "/sign-in", heading: "Sign in securely.", ready: "Sign in to MedNet" },
   { path: "/reset", heading: "Reset your password.", ready: "Reset your password" },
   { path: "/reset?email=patient%40example.test", heading: "Reset your password.", ready: "Enter your recovery code" },
-  { path: "/verify", heading: "Confirm your email.", ready: "We could not verify this link" },
+  // Without a legacy link token the page goes straight to the six-digit code form.
+  { path: "/verify", heading: "Confirm your email.", ready: "Email verification" },
   { path: "/account", heading: "Your MedNet account.", ready: "Sign in to continue" },
 ];
 
@@ -81,9 +82,10 @@ test.describe("account access pages", () => {
   test("every sign-in mode passes WCAG AA checks", async ({ page }) => {
     await stubAuthApi(page);
     await page.goto("/sign-in");
+    // Spring Security's default authorization endpoint, proxied to the API by next.config and LPAD.
     await expect(page.getByRole("link", { name: "Continue with Google" })).toHaveAttribute(
       "href",
-      "/api/v1/auth/oauth2/authorization/google",
+      "/oauth2/authorization/google",
     );
 
     await page.locator("label").filter({ hasText: "Create account" }).click();
@@ -101,9 +103,10 @@ test.describe("account access pages", () => {
 
   test("the Google error notice is announced and accessible", async ({ page }) => {
     await stubAuthApi(page, { google: false });
-    await page.goto("/sign-in?error=google");
+    // SecurityConfig's Google failure handler redirects here; with Google disabled no Google link is offered.
+    await page.goto("/sign-in?googleError=1");
     await expect(page.getByRole("alert").filter({ hasText: "Google sign-in could not be completed" })).toBeVisible();
-    await expect(page.getByText("Google sign-in is not configured for this deployment yet.")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Continue with Google" })).toHaveCount(0);
     await expectNoAxeViolations(page);
   });
 
