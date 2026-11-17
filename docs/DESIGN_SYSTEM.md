@@ -707,4 +707,13 @@ Next.js): it crops the uneven transparent padding, resizes, and changes nothing 
 | `src/app/apple-icon.png` | Apple touch icon | 180×180 on white (iOS fills transparency with black) |
 
 Square icons centre the favicon artwork with transparent padding. Re-run the script if a master changes.
-The artwork spells the name "MedNeT"; product copy still says "MedNet" pending a decision.
+**Decisions (owner, 2026-11-17):** "MedNet" is the official product name in application text and
+documentation; the official artwork keeps its stylised "MedNeT" lettering. The artwork is not redesigned,
+and application colours and typography stay as they are.
+
+**Possible future branding improvements (not scheduled):**
+
+- A favicon drawn for small sizes: at 16px the dark teal stroke is faint on dark browser tabs (the green
+  "M" and swoosh still read).
+- A logo variant without the heartbeat line for small sizes: the line blurs at 28–32px tall.
+- A dark mode, if added, can use the reversed logo.

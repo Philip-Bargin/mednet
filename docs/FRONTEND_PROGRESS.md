@@ -1688,5 +1688,7 @@ no new dependency). Details and sizes: DESIGN_SYSTEM.md § Brand assets.
 - Verification: Vitest 205/205 (new `wordmark.test.tsx`); new `e2e/branding.spec.ts` 21/21; full mocked
   Playwright 1022 passed, 43 skipped by design; lint, typecheck and production build pass. Screens checked at
   320, 390, 820 and 1440px; favicon checked at 16 and 32px on light and dark.
-- Open: the artwork spells "MedNeT" while product copy says "MedNet"; the favicon's teal stroke is faint on
-  dark browser tabs at 16px; no dark mode exists yet (the reversed logo would serve it).
+- Approved by the owner (2026-11-17). "MedNet" is the product name in text and documentation; the artwork
+  keeps its stylised "MedNeT" lettering and is not redesigned. Future improvements (DESIGN_SYSTEM.md
+  § Brand assets): a small-size favicon (faint teal stroke on dark tabs at 16px) and a logo variant without
+  the heartbeat line (blurs at 28–32px).
