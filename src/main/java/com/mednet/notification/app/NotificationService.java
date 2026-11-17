@@ -1,5 +1,6 @@
 package com.mednet.notification.app;
 
+import java.util.regex.Pattern;
 import java.util.UUID;
 import java.util.List;
 
@@ -7,7 +8,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -15,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.context.event.EventListener;
 
+import com.mednet.api.Pagination;
 import com.mednet.admin.data.PlatformAccountEntity;
 import com.mednet.admin.data.PlatformAccountRepository;
 import com.mednet.notification.data.NotificationEntity;
@@ -24,16 +25,25 @@ import com.mednet.notification.data.NotificationRepository;
 @ConditionalOnProperty(prefix = "spring.datasource", name = "url")
 public class NotificationService {
 
+    /** Event types are upper-case identifiers such as APPOINTMENT or PROVIDER_APPLICATION. */
+    private static final Pattern EVENT_TYPE = Pattern.compile("[A-Z_]{1,40}");
+
     private final PlatformAccountRepository accounts;
     private final NotificationRepository notifications;
+    private final NotificationEmailOutboxOperations emailOutbox;
     private final String configuredAdminEmail;
+    private final boolean emailNotificationsEnabled;
 
     public NotificationService(
             PlatformAccountRepository accounts,
             NotificationRepository notifications,
-            @Value("${mednet.admin.email:}") String configuredAdminEmail) {
+            NotificationEmailOutboxOperations emailOutbox,
+            @Value("${mednet.admin.email:}") String configuredAdminEmail,
+            @Value("${mednet.notifications.email.enabled:true}") boolean emailNotificationsEnabled) {
         this.accounts = accounts;
         this.notifications = notifications;
+        this.emailOutbox = emailOutbox;
+        this.emailNotificationsEnabled = emailNotificationsEnabled;
         this.configuredAdminEmail = configuredAdminEmail == null
                 ? ""
                 : configuredAdminEmail.trim().toLowerCase(java.util.Locale.ROOT);
@@ -53,15 +63,23 @@ public class NotificationService {
             String title,
             String resourceType,
             String resourceId) {
-        if (!notifications.existsByEventKey(eventKey)) {
-            notifications.save(new NotificationEntity(
-                    UUID.randomUUID().toString(),
-                    recipientAccountId,
-                    eventKey,
-                    eventType,
-                    title,
-                    resourceType,
-                    resourceId));
+        if (notifications.existsByEventKey(eventKey)) {
+            return;
+        }
+        NotificationEntity notification = notifications.save(new NotificationEntity(
+                UUID.randomUUID().toString(),
+                recipientAccountId,
+                eventKey,
+                eventType,
+                title,
+                resourceType,
+                resourceId));
+        if (emailNotificationsEnabled) {
+            accounts.findById(recipientAccountId)
+                    .filter(account -> "ACTIVE".equals(account.getStatus())
+                            && account.isEmailVerified()
+                            && account.isEmailNotificationsEnabled())
+                    .ifPresent(account -> emailOutbox.enqueue(notification.getId(), account.getId()));
         }
     }
 
@@ -94,12 +112,28 @@ public class NotificationService {
 
     @Transactional
     public Page<NotificationDetails> list(String email, int page, int size) {
+        return list(email, page, size, null);
+    }
+
+    /**
+     * The signed-in user's notifications, newest first, optionally limited to one event type (for example
+     * {@code PROVIDER_APPLICATION} on the provider onboarding dashboard). Recipient scoping is unchanged.
+     */
+    @Transactional
+    public Page<NotificationDetails> list(String email, int page, int size, String eventType) {
         PlatformAccountEntity account = account(email);
-        return notifications.findByRecipientAccountIdOrderByCreatedAtDesc(
-                        account.getId(), PageRequest.of(
-                                Math.max(page, 0),
-                                Math.min(Math.max(size, 1), 100),
-                                Sort.by(Sort.Direction.DESC, "createdAt")))
+        var pageable = Pagination.pageRequest(
+                page,
+                size,
+                Sort.by(Sort.Order.desc("createdAt"), Sort.Order.asc("id")));
+        if (eventType == null || eventType.isBlank()) {
+            return notifications.findByRecipientAccountId(account.getId(), pageable)
+                    .map(NotificationService::toDetails);
+        }
+        if (!EVENT_TYPE.matcher(eventType).matches()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown notification event type");
+        }
+        return notifications.findByRecipientAccountIdAndEventType(account.getId(), eventType, pageable)
                 .map(NotificationService::toDetails);
     }
 
@@ -115,6 +149,19 @@ public class NotificationService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Notification not found"));
         notification.markRead();
         return toDetails(notification);
+    }
+
+    @Transactional(readOnly = true)
+    public NotificationPreferences preferences(String email) {
+        PlatformAccountEntity account = account(email);
+        return new NotificationPreferences(account.isEmailNotificationsEnabled(), account.isEmailVerified());
+    }
+
+    @Transactional
+    public NotificationPreferences updateEmailPreference(String email, boolean enabled) {
+        PlatformAccountEntity account = account(email);
+        account.setEmailNotificationsEnabled(enabled);
+        return new NotificationPreferences(account.isEmailNotificationsEnabled(), account.isEmailVerified());
     }
 
     private PlatformAccountEntity account(String email) {
@@ -163,5 +210,8 @@ public class NotificationService {
             String resourceId,
             java.time.Instant createdAt,
             java.time.Instant readAt) {
+    }
+
+    public record NotificationPreferences(boolean emailEnabled, boolean emailVerified) {
     }
 }

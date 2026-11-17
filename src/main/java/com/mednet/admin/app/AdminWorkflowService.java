@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.mednet.api.Pagination;
 import com.mednet.admin.data.AdminAuditEventEntity;
 import com.mednet.admin.data.AdminAuditEventRepository;
 import com.mednet.admin.data.AdminWorkflowModels.AdminAuditEvent;
@@ -147,8 +148,14 @@ public class AdminWorkflowService {
         ProviderApplicationEntity entity = providers.findByIdForUpdate(id)
                 .orElseThrow(() -> notFound("Provider application"));
         String nextStatus = requireStatus(status, PROVIDER_STATUSES);
+        String previousStatus = entity.getStatus();
         entity.review(nextStatus, actor);
         audit(actor, "provider." + nextStatus.toLowerCase(Locale.ROOT), "provider", id);
+        if (!nextStatus.equals(previousStatus)) {
+            // The PROVIDER role is resolved at sign-in from the application status, so a review decision
+            // ends the applicant's sessions and the new access applies from their next sign-in.
+            sessions.endAll(entity.getEmail());
+        }
         if ("APPROVED".equals(nextStatus) || "REJECTED".equals(nextStatus)) {
             accounts.findFirstByEmailIgnoreCase(entity.getEmail())
                     .filter(account -> "ACTIVE".equals(account.getStatus()))
@@ -168,9 +175,10 @@ public class AdminWorkflowService {
     @Transactional(readOnly = true)
     public Page<PlatformAccount> accounts(
             int page, int size, String search, String status, String accountType, Boolean emailVerified) {
-        int safePage = Math.max(0, page);
-        int safeSize = Math.min(Math.max(1, size), 100);
-        var pageable = PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "createdAt"));
+        var pageable = Pagination.pageRequest(
+                page,
+                size,
+                Sort.by(Sort.Order.desc("createdAt"), Sort.Order.asc("id")));
         String normalizedSearch = search == null ? "" : search.trim();
         String normalizedStatus = status == null || status.isBlank() ? null : requireStatus(status, ACCOUNT_STATUSES);
         String normalizedType =

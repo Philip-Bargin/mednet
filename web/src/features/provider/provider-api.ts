@@ -29,6 +29,11 @@ export type ProviderApplication = {
   reviewedAt: string | null;
 };
 
+export type ProviderPatientSummary = {
+  patientAccountId: string;
+  name: string;
+};
+
 /** Actions a provider may send (`AppointmentController.AppointmentActionRequest`). */
 export type ProviderAppointmentAction =
   | "ACCEPT"
@@ -71,6 +76,12 @@ export const providerApi = {
 
   appointments: (page = 0, size = 100, signal?: Signal) =>
     apiRequest<Page<Appointment>>("/appointments", { query: { page, size }, signal }),
+  patients: (page = 0, size = 25, signal?: Signal) =>
+    apiRequest<Page<ProviderPatientSummary>>("/providers/me/patients", { query: { page, size }, signal }),
+  patient: (patientAccountId: string, signal?: Signal) =>
+    apiRequest<ProviderPatientSummary>(`/providers/me/patients/${id(patientAccountId)}`, { signal }),
+  patientAppointments: (patientAccountId: string, page = 0, size = 25, signal?: Signal) =>
+    apiRequest<Page<Appointment>>(`/providers/me/patients/${id(patientAccountId)}/appointments`, { query: { page, size }, signal }),
   appointment: (appointmentId: string, signal?: Signal) => apiRequest<Appointment>(`/appointments/${id(appointmentId)}`, { signal }),
   act: (appointmentId: string, action: ProviderAppointmentAction, proposedAvailabilitySlotId?: string) =>
     apiRequest<Appointment>(`/appointments/${id(appointmentId)}`, {
@@ -103,6 +114,11 @@ export const providerApi = {
     apiRequest<ReviewQueuePage>("/providers/me/lab-review-queue", { query: { page, size }, signal }),
   pendingLabResults: (patientAccountId: string, signal?: Signal) =>
     apiRequest<LabResult[]>(`/patients/${id(patientAccountId)}/lab-results/pending`, { signal }),
+  pendingLabResultsPage: (patientAccountId: string, page: number, size: number, signal?: Signal) =>
+    apiRequest<Page<LabResult>>(`/patients/${id(patientAccountId)}/lab-results/pending`, {
+      query: { page, size },
+      signal,
+    }),
   reviewLabResult: (resultId: string, action: "RELEASE" | "RETURN") =>
     apiRequest<LabResult>(`/lab-results/${id(resultId)}/review`, { method: "PATCH", body: { action } }),
 
@@ -115,6 +131,12 @@ export const providerApi = {
 
   notifications: (page = 0, size = 10, signal?: Signal) =>
     apiRequest<Page<Notification>>("/notifications", { query: { page, size }, signal }),
+  /**
+   * Review decisions on this account's provider application (`eventType=PROVIDER_APPLICATION`): generic
+   * titles only, no reviewer notes. Readable with the PATIENT role, so applicants see them on onboarding.
+   */
+  applicationUpdates: (signal?: Signal) =>
+    apiRequest<Page<Notification>>("/notifications", { query: { page: 0, size: 10, eventType: "PROVIDER_APPLICATION" }, signal }),
   unreadCount: (signal?: Signal) => apiRequest<number>("/notifications/unread-count", { signal }),
   markNotificationRead: (notificationId: string) =>
     apiRequest<Notification>(`/notifications/${id(notificationId)}/read`, { method: "PATCH" }),

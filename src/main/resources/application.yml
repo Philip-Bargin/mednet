@@ -7,13 +7,22 @@ spring:
     open-in-view: false
   datasource:
     hikari:
-      maximum-pool-size: 5
-      minimum-idle: 1
+      maximum-pool-size: 2
+      minimum-idle: 0
   flyway:
     connect-retries: 10
     connect-retries-interval: 2s
+  session:
+    jdbc:
+      initialize-schema: never
 
 mednet:
+  notifications:
+    email:
+      enabled: ${MEDNET_EMAIL_NOTIFICATIONS_ENABLED:true}
+      initial-delay: ${MEDNET_EMAIL_DISPATCH_INITIAL_DELAY:PT10S}
+      dispatch-interval: ${MEDNET_EMAIL_DISPATCH_INTERVAL:PT15S}
+      web-base-url: ${MEDNET_WEB_BASE_URL:http://localhost:3000}
   admin:
     email: ${MEDNET_ADMIN_EMAIL:}
     password: ${MEDNET_ADMIN_PASSWORD:}

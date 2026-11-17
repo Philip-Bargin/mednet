@@ -462,9 +462,10 @@ assertion waits) and passed completely. The API logged no errors. The workflow I
 ### Approved backend changes (§7, §8)
 
 - **§7 Laboratory result read-back:** `GET /api/v1/partner/lab-results` (`LABORATORY` only). Returns results
-  **authored by the caller on requests still assigned to the caller**, newest first, latest 100, as
+  **authored by the caller on requests still assigned to the caller**, newest first, as
   `LaboratoryResultDetails` (id, requestId, summary, status, createdAt, reviewedAt) — no patient or reviewer
-  identifier. Read-only; no change to review or release. Uses the existing `author_account_id` column: no
+  identifier. The compatibility route without `page` is limited to 100; active result screens use the complete,
+  paged `?page=&size=&status=` API. Read-only; no change to review or release. Uses the existing `author_account_id` column: no
   migration, no other authorization change. Audit action `laboratory_result.partner_accessed` (the first name
   exceeded the 40-character audit column; caught by the backend test).
   - Tests: pending → returned → released read-back; another laboratory sees an empty list; patient, doctor,
@@ -1663,3 +1664,31 @@ confirmation.
 - Remaining legacy CSS in `globals.css` serves only `admin-portal.tsx`; it goes with 4E.
 - `admin-portal.tsx` (1,594 lines) needs splitting during Phase 4E.
 - Dev-dependency audit findings to review.
+
+## Official branding (2026-11-17, branch `branding/official-logo`)
+
+The text wordmark is replaced by the official artwork supplied by the owner. Masters (unchanged, committed
+as sources): `web/public/images/MedNet-Logo.png`, `MedNeT_Reversed_Logo.png`, `MedNeT_Favicon.png`. Served
+copies come from `web/scripts/brand-assets.mjs` (crop the transparent padding, resize; `sharp` from Next.js,
+no new dependency). Details and sizes: DESIGN_SYSTEM.md § Brand assets.
+
+| Placement | Asset | Height |
+|---|---|---|
+| Public header | full-colour logo | 28px phones, 40px from 768px |
+| Public footer | full-colour logo (lazy) | 40px |
+| Sign-in, provider sign-up, verify, reset | full-colour logo | 32px phones, 40px from 768px |
+| Session-ended and loading screens | full-colour logo | 32px |
+| Expanded workspace sidebar | reversed logo | 40px |
+| Collapsed sidebar rail | official favicon mark on a 40px white tile | 24px |
+| Browser tab, Apple touch icon | official favicon (`favicon.ico`, `icon.png`, `apple-icon.png`) | 16–512px |
+
+- The public header's action group keeps a 12px minimum gap after the logo (it touched "Book an
+  appointment" below 375px at 32px); "Book an appointment" still wraps to two lines at 320px.
+- The favicon mark's dark teal stroke is 1.3:1 on the sidebar green, so the rail mark sits on a white tile.
+- Verification: Vitest 205/205 (new `wordmark.test.tsx`); new `e2e/branding.spec.ts` 21/21; full mocked
+  Playwright 1022 passed, 43 skipped by design; lint, typecheck and production build pass. Screens checked at
+  320, 390, 820 and 1440px; favicon checked at 16 and 32px on light and dark.
+- Approved by the owner (2026-11-17). "MedNet" is the product name in text and documentation; the artwork
+  keeps its stylised "MedNeT" lettering and is not redesigned. Future improvements (DESIGN_SYSTEM.md
+  § Brand assets): a small-size favicon (faint teal stroke on dark tabs at 16px) and a logo variant without
+  the heartbeat line (blurs at 28–32px).

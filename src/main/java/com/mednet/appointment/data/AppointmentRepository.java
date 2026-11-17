@@ -1,5 +1,6 @@
 package com.mednet.appointment.data;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -12,6 +13,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import jakarta.persistence.LockModeType;
+import com.mednet.provider.data.ProviderAvailabilitySlotEntity;
 
 public interface AppointmentRepository extends JpaRepository<AppointmentEntity, String> {
 
@@ -19,26 +21,34 @@ public interface AppointmentRepository extends JpaRepository<AppointmentEntity, 
     @Query("select appointment from AppointmentEntity appointment where appointment.id = :id")
     Optional<AppointmentEntity> findByIdForUpdate(@Param("id") String id);
 
-    Page<AppointmentEntity> findByPatientAccountIdOrderByCreatedAtDesc(
-            String patientAccountId, Pageable pageable);
+    Page<AppointmentEntity> findByPatientAccountId(String patientAccountId, Pageable pageable);
 
-    Page<AppointmentEntity> findByProviderApplicationIdOrderByCreatedAtDesc(
-            String providerApplicationId, Pageable pageable);
+    Page<AppointmentEntity> findByProviderApplicationId(String providerApplicationId, Pageable pageable);
+
+    Page<AppointmentEntity> findByProviderApplicationIdAndPatientAccountId(
+            String providerApplicationId, String patientAccountId, Pageable pageable);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<AppointmentEntity> findFirstByPatientAccountIdAndProviderApplicationIdAndStatusInOrderByCreatedAtDesc(
+            String patientAccountId, String providerApplicationId, Collection<String> statuses);
+
+    boolean existsByPatientAccountIdAndProviderApplicationIdAndStatusIn(
             String patientAccountId, String providerApplicationId, Collection<String> statuses);
 
     boolean existsByPatientAccountId(String patientAccountId);
 
     boolean existsByProviderApplicationId(String providerApplicationId);
 
-    /** Patients with an appointment in one of the given statuses with this provider. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
-            select distinct appointment.patientAccountId from AppointmentEntity appointment
-            where appointment.providerApplicationId = :providerId
-              and appointment.status in :statuses
+            select appointment from AppointmentEntity appointment,
+                 ProviderAvailabilitySlotEntity slot
+            where appointment.status = 'CONFIRMED'
+              and appointment.availabilitySlotId = slot.id
+              and slot.startsAt > :after
+              and slot.startsAt <= :before
+            order by slot.startsAt asc
             """)
-    List<String> findPatientIdsByProviderAndStatusIn(
-            @Param("providerId") String providerId, @Param("statuses") Collection<String> statuses);
+    List<AppointmentEntity> findConfirmedAppointmentsStartingBetween(
+            @Param("after") Instant after, @Param("before") Instant before);
 }

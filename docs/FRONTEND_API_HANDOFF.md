@@ -67,6 +67,43 @@ Phase 5D (performance; additive, backward compatible — every list keeps its ol
   Spring page instead of the first 100 rows. `GET /admin/audit/resource-types` lists record types.
 - `GET /partner/service-requests?type=LABORATORY` rows add `latestResult` (`{id, status, createdAt,
   reviewedAt}` or null; no text).
+
+Appointment and provider-patient history is paged server-side (zero-based `page`, default `size=25`,
+maximum `size=100`). `GET /appointments` continues to return only the authenticated patient's or
+approved provider's appointments, with deterministic creation-time/ID ordering. Patient and provider
+appointment views navigate every page while retaining their existing status groupings and actions.
+The provider patient directory uses `GET /providers/me/patients?page=&size=` instead of deriving
+patients from one appointment page. It returns only active patient accounts with an eligible
+`CONFIRMED`, `COMPLETED`, or `RESCHEDULE_REQUESTED` care relationship to the authenticated approved
+provider, ordered by patient name and account ID. The response contains only patient account ID and
+profile name; it does not grant record access. `GET /providers/me/patients/{patientAccountId}` applies
+the same relationship check for a detail page, and
+`GET /providers/me/patients/{patientAccountId}/appointments?page=&size=` returns that relationship's
+appointment history, still scoped to the authenticated provider. All three routes are provider-only;
+the nested history route validates pagination and care access on the server.
+
+Admin CSV exports are frontend-only and use the existing paged admin endpoints above; no API route or
+authorization rule was added. Audit export reuses the current search and record-type filters, while
+home-care/laboratory request exports reuse the selected request type and status filter. Appointment
+and operational-reference exports page through their existing lists. Each page request is limited
+to 100 rows, and every matching page is fetched before the download begins. The CSV allowlists only
+fields already shown in the corresponding admin list: audit time/action/actor/short record reference,
+appointment timing/mode/status/short references, request status/date/assigned public ID, or
+operational reference/type/status/date. It excludes clinical text, patient records, lab result
+summaries, medication/vital data, and hidden requester details. Cells are RFC 4180 quoted and
+spreadsheet formula-leading values are neutralized. These list exports do not implement RPT-08
+reporting data or add aggregate metrics.
+
+The admin Reports page also calls `GET /admin/reports` with optional ISO `from` and `through`
+dates. Supply both or neither; the default is the latest 12 calendar months, dates are inclusive
+and grouped by UTC month, and ranges are limited to 731 days. It returns monthly counts for
+accounts (account type/status), appointments (consultation mode/status), patient service requests
+(request type/status), and laboratory results (status). No identifiers or clinical text are
+included. `GET /admin/reports/export.csv` returns the same aggregate report as CSV; both routes
+are admin-only. This is the initial approved aggregate scope, not a claim that all proposed
+RPT-01–RPT-07 are complete: provider-specific totals, overdue/action queues, and missed or
+completed consultation definitions still need client confirmation in `req.md`.
+
 Phase 5C (home care): no endpoint or contract change. The web client now uses the existing partner
 endpoints for `HOME_CARE` accounts at `/home-care`: `GET /partner/service-requests?type=HOME_CARE`
 (own assignments: `requestedService`, `locationDescription`, `status`, `scheduledAt`, dates; no patient
@@ -97,14 +134,63 @@ schemas, status codes, and parameters. The current guarded MVP includes:
   after sign-in by role: `ADMIN`/`SUPER_ADMIN` → `/admin`, `PATIENT` → `/patient`,
   `PROVIDER` (approved application) → `/provider`, `LABORATORY` → `/laboratory`, any other role → `/account`.
 - Laboratory staff read back their own submitted results with `GET /api/v1/partner/lab-results` (`LABORATORY` only;
-  results they authored on requests still assigned to them, newest first, latest 100). Fields: `id`, `requestId`,
-  `summary`, `status` (`PENDING_REVIEW`, `RETURNED`, `RELEASED`), `createdAt`, `reviewedAt`. No patient or reviewer
-  identifier. Read-only: review decisions remain with the doctor.
+  results they authored on requests still assigned to them, newest first). The backward-compatible unpaged form is
+  limited to the latest 100; `?page=&size=&status=` is paged and complete, and the laboratory results workspace uses
+  that form. Fields: `id`, `requestId`, `summary`, `status` (`PENDING_REVIEW`, `RETURNED`, `RELEASED`), `createdAt`,
+  `reviewedAt`. No patient or reviewer identifier. Read-only: review decisions remain with the doctor.
 - Patient profile, consent-gated records, medications, vitals, and notifications.
+- Patient home-care/laboratory request histories accept `page` and optional `size` (default 25, maximum 100) and return a Spring `Page`; omitting `page` preserves the existing list response. Both forms accept optional `status` (`OPEN`, `IN_PROGRESS`, `RESOLVED`, or `CANCELLED`) and `search`. Search is trimmed, case-insensitive, limited to 120 characters, and matches only the requested service description or location visible to the patient.
+- Patient request screens use server pagination and status/search filters. Medication reminders, dose-log histories, and patient/provider vital histories also use server-paged lists. Patient-released laboratory results are paged end-to-end; the patient and laboratory results screens expose page navigation and total counts. Legacy unpaged routes remain for compatibility.
+- Assigned partner work queues also accept `page` and `size` (default 25, maximum 100), with optional `status` and `search`; laboratory pages include the latest result status without exposing result text. Results are restricted to the authenticated staff account's assignments of the requested `type` (`HOME_CARE` or `LABORATORY`); search matches only requested service descriptions and locations already visible to that staff role. Omitting `page` preserves the existing list response.
+- For these service-request endpoints, invalid statuses and searches longer than 120 characters return `400`. Medication schedule and dose histories remain paginated as documented below.
+- `GET /api/v1/conversations?page=&size=` and `GET /api/v1/patients/me/record-consents?page=&size=` return paginated histories (default size 25, maximum 100). Omitting `page` preserves the existing list responses; conversation pages include only current eligible care relationships.
+- Provider pending laboratory results for a patient accept optional `page` and `size` (default 25, maximum 100); the existing unpaged response shape remains available. Record-consent and care-relationship checks apply to both forms.
 - Provider applications, approved-provider directory, availability, and appointments.
-- Participant-only text conversations associated with confirmed appointments.
+- Provider sign-up and onboarding: `/sign-up/provider` registers with `POST /api/v1/auth/register`
+  and `"accountType":"PROVIDER"`, then uses the normal email verification. After sign-in,
+  `GET /api/v1/auth/session` reports `role: "PATIENT"` with `accountType: "PROVIDER"` until approval;
+  the client routes that combination to `/provider`, which shows onboarding: the details form
+  (`POST /api/v1/providers/applications`) when `GET /api/v1/providers/me/application` is 404, otherwise
+  the pending-provider dashboard (`PENDING`, `REJECTED` with a corrected application, `SUSPENDED`,
+  `APPROVED`). `PENDING`, `APPROVED` and `SUSPENDED` applications block another submission (`409`);
+  a rejected applicant may submit a new one. Every review decision ends the applicant's sessions, so
+  approval takes effect at the next sign-in. Provider endpoints stay `PROVIDER`-only on the server;
+  `accountType` never grants access.
+- `GET /api/v1/notifications` accepts an optional `eventType` (upper-case identifier, for example
+  `PROVIDER_APPLICATION`; anything else returns `400`) and stays scoped to the signed-in recipient.
+  The onboarding dashboard lists `PROVIDER_APPLICATION` decisions (generic titles, no reviewer notes)
+  and marks them read with `PATCH /api/v1/notifications/{id}/read`, so applicants do not need the
+  patient workspace. Approvals and rejections create these notices; suspensions do not, so the
+  dashboard also shows the authoritative status from `GET /api/v1/providers/me/application`. When a
+  session ends during onboarding, the client explains that a review decision signs applicants out
+  and links back to `/sign-in?redirect=/provider`.
+- Pending-provider access (decided 2026-11-17, Option A, initial release): applicants awaiting a
+  decision see the onboarding dashboard as their default experience, and the web client does not offer
+  the patient workspace to them. This is a frontend navigation restriction only, not a server-side
+  denial: applicants hold the `PATIENT` role until approval, so patient API endpoints still accept
+  their requests. Roles are single-valued: after approval the account signs in as `PROVIDER` only, so
+  any patient data created from that account while pending would become unreachable from it. Anyone
+  who needs care should use a separate patient account. Multi-role accounts, opening the patient
+  workspace to applicants, and a server-side applicant role are deferred and need separate approval.
+- Rejection reasons (deferred 2026-11-17): rejection and resubmission work as described above, and no
+  reason is recorded or shown. A future enhancement would add an applicant-visible explanation kept
+  separate from confidential internal administrative notes; internal notes must never reach the
+  applicant or notifications. Not built; needs a migration and separate approval.
+- Support contact details: none are shown in onboarding or elsewhere until official MedNet contact
+  information is provided; `/contact` remains a placeholder. Do not add invented addresses or numbers.
+- In-app appointment reminders for both participants, generated within 24 hours and again within 1 hour of a confirmed appointment. These reminders are idempotent. Email delivery is enabled through account preferences and sends privacy-safe generic notices (appointment status/time only); SMS and push delivery remain out of scope.
+- Participant-only text conversations associated with confirmed appointments. Providers can record one text consultation outcome with `PUT /api/v1/consultations/{id}/outcome` after ending the session; the backend appends an `ENCOUNTER_SUMMARY` only when the existing patient consent and care-relationship checks pass. The end-session endpoint remains backward compatible.
 - Patient home-care and laboratory requests, assigned partner work queues, and laboratory result review/release.
 - Administrator dashboard, provider review, account provisioning, and operational workflows.
+- Notification preferences are available to signed-in users at `GET /api/v1/notifications/preferences`
+  and can be changed with `PATCH /api/v1/notifications/preferences` using
+  `{"emailEnabled":true|false}`. Email notifications are queued transactionally with the in-app
+  notification, sent only to active accounts with verified email addresses and email enabled, and
+  retried from a persisted outbox with bounded exponential backoff. Appointment emails contain only
+  the current appointment status and scheduled time; other notification emails are generic and do
+  not include message previews, laboratory result text, medication details, or clinical content.
+  Users can update this preference in their account profile. Delivery uses the existing EKDSend
+  configuration; email can be disabled globally with `MEDNET_EMAIL_NOTIFICATIONS_ENABLED=false`.
 
 Provider availability slots expose `consultationMode` as `IN_PERSON` or `TEXT`; omit it only for
 legacy compatibility, where the backend defaults it to `TEXT`. Appointment responses include the
@@ -118,10 +204,10 @@ These fields were added in Phase 4D; they are additive and derived from existing
 ## Important scope boundaries
 
 The backend is a guarded MVP, not a completed clinical/service launch. Video or voice consultations,
-emergency handling, payments, binary file uploads, external service routing, SMS/email/push
-notifications, prescribing, medication interaction checks, and vital thresholds/alerts are not
-implemented. Some current safeguards are conservative engineering defaults that still need sponsor
-and legal confirmation.
+emergency handling, payments, binary file uploads, external service routing, SMS/push notifications,
+prescribing, medication interaction checks, and vital thresholds/alerts are not implemented. Email
+delivery is available for notifications under the privacy boundaries above. Some current safeguards
+are conservative engineering defaults that still need sponsor and legal confirmation.
 
 Before extending those areas, review the blocking and high-priority product decisions in
 [req.md](req.md), especially release scope, provider credential verification, payments,

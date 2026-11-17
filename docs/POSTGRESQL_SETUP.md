@@ -67,6 +67,66 @@ psql -h localhost -U mednet_test -d mednet_test -c "select current_user, current
 
 Because PostgreSQL 15+ owns the `public` schema through `pg_database_owner`, each owner role can create
 the Flyway tables in its own database without further grants.
+On PostgreSQL 14 and earlier, explicitly assign the test database's `public` schema to its test role
+before running the profile (the GitHub Actions job does this explicitly):
+
+```sql
+ALTER SCHEMA public OWNER TO mednet_test;
+```
+
+### Windows, local PostgreSQL 18 (service `postgresql-x64-18`)
+
+`psql` is at `C:\Program Files\PostgreSQL\18\bin\psql.exe` and is not on the `PATH`. The local server's
+`pg_hba.conf` accepts loopback clients only, with `scram-sha-256`.
+
+**Administrator-only (the person who knows the `postgres` superuser password, in their own terminal).**
+Run this from PowerShell or `cmd`, not through an assistant session, so the password prompts reach your
+keyboard and nothing is logged. Connect, then run the provisioning SQL above. `\password` prompts twice per
+role, and psql sends only a SCRAM hash.
+
+```powershell
+& "C:\Program Files\PostgreSQL\18\bin\psql.exe" -h localhost -U postgres -d postgres
+```
+
+Then point the test settings at it. In `.env.test.local` (git-ignored), set:
+
+```properties
+MEDNET_TEST_DATABASE_URL=jdbc:postgresql://localhost:5432/mednet_test
+MEDNET_TEST_DATABASE_USERNAME=mednet_test
+MEDNET_TEST_DATABASE_PASSWORD=<the mednet_test password you just set>
+MEDNET_E2E_DATABASE_URL=jdbc:postgresql://localhost:5432/mednet_e2e_test
+```
+
+That is the only step that needs the superuser. Nothing else in this guide connects as `postgres`.
+
+**Unprivileged checks (as `mednet_test`; safe to run from any session).** These read only:
+
+```sql
+SELECT current_user, current_database(), inet_server_addr();
+SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls
+FROM pg_roles WHERE rolname = current_user;          -- every column must be false
+SELECT datname, pg_get_userbyid(datdba) AS owner
+FROM pg_database WHERE datname LIKE 'mednet%';       -- mednet_test and mednet_e2e_test owned by mednet_test
+SELECT r.rolname FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid
+WHERE m.member = (SELECT oid FROM pg_roles WHERE rolname = current_user);  -- expect no rows
+```
+
+**Local-only guard.** `PostgreSqlTestDatabase` (Maven profile) and `web/e2e/support/live-backend.ts` (live
+specs) refuse any host other than `localhost`, `127.0.0.1` or `::1` before opening a connection. A hosted
+`mednet_test` database (such as the Supabase one from Phase 5A, whose `postgres` role is not a superuser and
+owns databases it creates) passes the name, superuser and ownership checks, so the host check is what keeps
+these runs off hosted servers. Opt out only for a disposable remote test server, with
+`MEDNET_TEST_DATABASE_ALLOW_REMOTE=true` or `MEDNET_LIVE_PG_ALLOW_REMOTE=1`.
+
+**What deletes data.** Only these, and only in the `_test` databases:
+
+| Operation | Effect |
+|---|---|
+| `mvn -Ppostgres-it verify` | Drops and recreates the `public` schema of `mednet_test` once per run, then Flyway migrates V1 onwards |
+| Emptying the e2e database (the `DROP SCHEMA` command under "Running the checks") | Drops and recreates the `public` schema of `mednet_e2e_test` |
+| Live specs | Add synthetic accounts and records; the helper writes stand-in email tokens (`UPDATE` on `platform_accounts`) and reads the email outbox (`SELECT` only) |
+
+Nothing in this guide drops roles or databases, and `mednet` (development) is never reset by tests.
 
 ## Credential rotation (open since 2026-10-11)
 
@@ -148,17 +208,19 @@ SERVER_PORT=8081 SESSION_COOKIE_SECURE=false JAVA_TOOL_OPTIONS=-Xmx768m mvn spri
 Environment variables override the values imported from `.env`, so the development database is not
 touched.
 
-## Compatibility review (static, Phase 5A)
+## Compatibility review (updated 2026-10-26)
 
-- All repository queries are JPQL; there is no native SQL. Search uses `LOWER(...) LIKE LOWER(CONCAT(...))`,
-  which is portable.
+- Most repository queries use JPQL; the laboratory review queue uses a native aggregate query and the
+  PostgreSQL rate-limit store uses atomic `INSERT ... ON CONFLICT ... RETURNING`. The review queue
+  projects its oldest timestamp as epoch milliseconds for stable PostgreSQL/H2 conversion.
 - Migrations use portable types: `VARCHAR`, `BOOLEAN`, `INTEGER`, `NUMERIC(12,3)`, `DATE`, `TIME`,
   `TIMESTAMP WITH TIME ZONE` (mapped from `Instant`, microsecond precision in both databases). V14 uses
-  PostgreSQL `UPDATE … FROM`, which H2's PostgreSQL mode also accepts.
+  PostgreSQL `UPDATE … FROM`, which H2's PostgreSQL mode also accepts. V21 adds JDBC sessions and shared
+  rate-limit windows.
 - Statuses and roles are `VARCHAR` with `CHECK` constraints, not database enum types, so enum handling
   is identical.
 - Identifiers are application-generated UUID strings; there are no sequences or identity columns.
 - V3, V8 and V9 drop PostgreSQL's generated check-constraint names and H2's (`CONSTRAINT_9186`,
   `CONSTRAINT_F6D704`) with `IF EXISTS`, so both databases end with one named constraint.
-- Not yet observed on PostgreSQL: ordering ties on equal `created_at`, transaction isolation under
-  concurrent updates, and the 40-character `admin_audit_events.action` limit (enforced the same way in H2).
+- The full backend and workflow profile passes against isolated PostgreSQL 14. Ordering ties on equal
+  `created_at` and transaction isolation under concurrent workflow updates still need dedicated tests.
