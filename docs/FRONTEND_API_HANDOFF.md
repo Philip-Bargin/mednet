@@ -164,10 +164,20 @@ schemas, status codes, and parameters. The current guarded MVP includes:
   dashboard also shows the authoritative status from `GET /api/v1/providers/me/application`. When a
   session ends during onboarding, the client explains that a review decision signs applicants out
   and links back to `/sign-in?redirect=/provider`.
-- Open product decision: provider applicants hold the `PATIENT` role on the server until approval, so
-  patient endpoints accept their requests, but the web client routes them to onboarding instead of the
-  patient workspace. Roles are single-valued: after approval the account signs in as `PROVIDER` only,
-  and any patient data it created while pending is no longer reachable from that account.
+- Pending-provider access (decided 2026-11-17, Option A, initial release): applicants awaiting a
+  decision see the onboarding dashboard as their default experience, and the web client does not offer
+  the patient workspace to them. This is a frontend navigation restriction only, not a server-side
+  denial: applicants hold the `PATIENT` role until approval, so patient API endpoints still accept
+  their requests. Roles are single-valued: after approval the account signs in as `PROVIDER` only, so
+  any patient data created from that account while pending would become unreachable from it. Anyone
+  who needs care should use a separate patient account. Multi-role accounts, opening the patient
+  workspace to applicants, and a server-side applicant role are deferred and need separate approval.
+- Rejection reasons (deferred 2026-11-17): rejection and resubmission work as described above, and no
+  reason is recorded or shown. A future enhancement would add an applicant-visible explanation kept
+  separate from confidential internal administrative notes; internal notes must never reach the
+  applicant or notifications. Not built; needs a migration and separate approval.
+- Support contact details: none are shown in onboarding or elsewhere until official MedNet contact
+  information is provided; `/contact` remains a placeholder. Do not add invented addresses or numbers.
 - In-app appointment reminders for both participants, generated within 24 hours and again within 1 hour of a confirmed appointment. These reminders are idempotent. Email delivery is enabled through account preferences and sends privacy-safe generic notices (appointment status/time only); SMS and push delivery remain out of scope.
 - Participant-only text conversations associated with confirmed appointments. Providers can record one text consultation outcome with `PUT /api/v1/consultations/{id}/outcome` after ending the session; the backend appends an `ENCOUNTER_SUMMARY` only when the existing patient consent and care-relationship checks pass. The end-session endpoint remains backward compatible.
 - Patient home-care and laboratory requests, assigned partner work queues, and laboratory result review/release.
